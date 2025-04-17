@@ -73,7 +73,7 @@ dmypy.json
 .DS_Store
 Thumbs.db
 
-# Runtime Data / Logs (Assuming app handles missing files)
+# Runtime Data / Logs
 data/
 *.log
 logs/

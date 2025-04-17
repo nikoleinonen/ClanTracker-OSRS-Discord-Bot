@@ -12,8 +12,6 @@ import re # Added for parsing helpers
 from typing import Dict, Optional, Set, Tuple, List, Any
 import random
 from collections import OrderedDict # Ensure OrderedDict is imported
-
-# --- NEW IMPORTS ---
 from aiohttp import web # For the web server API
 
 # --- Logging Setup (Stream Only for Production) ---
@@ -59,7 +57,7 @@ STATUS_CHANNEL_ID: Optional[int] = int(STATUS_CHANNEL_ID_STR) if STATUS_CHANNEL_
 DEFAULT_STATUS_MESSAGE: str = os.getenv('DEFAULT_BOT_STATUS', "Tracking OSRS Clans") # Default status
 
 # Data Storage
-DATA_DIR: str = "data"
+DATA_DIR: str = "/data"
 IDENTIFIER_FILE_NAME: str = "clan_identifiers.json"
 IDENTIFIER_FILE: str = os.path.join(DATA_DIR, IDENTIFIER_FILE_NAME)
 IDENTIFIER_LENGTH: int = 8
@@ -72,8 +70,8 @@ HYD_FILE_PATH: str = os.path.join(RESPONSES_DIR, HYD_FILE_NAME)
 # External Links
 GITHUB_README_MD_LINK: str = os.getenv('GITHUB_README_MD_LINK', "https://github.com/YOUR_USERNAME/YOUR_REPO/blob/main/info.md") # <-- TODO: Set this in Railway env vars!
 
-# Permissions
-BOT_PERMISSIONS: int = 68624 # Keep as is unless scope changes
+# Bot Discord Permissions
+BOT_PERMISSIONS: int = 68624
 
 # --- Global Storage for Identifiers ---
 server_identifiers: Dict[str, Dict[str, str]] = {}
