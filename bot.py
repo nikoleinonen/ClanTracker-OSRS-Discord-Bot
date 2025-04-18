@@ -18,7 +18,7 @@ import io
 
 # --- Logging Setup (Stream Only for Production) ---
 log_formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(name)s: %(message)s')
-log_level = logging.INFO
+log_level = logging.DEBUG
 
 # Configure root logger
 logger = logging.getLogger()
