@@ -514,7 +514,7 @@ class ClanTrackerClient(discord.Client):
                      return web.json_response({"error": f"Forbidden: Bot lacks permissions to read #{CONFIG_CHANNEL_NAME}."}, status=403)
                 else:
                     # Fetch using bot's client directly (async iterator)
-                    messages = [msg async for msg in config_channel.history(limit=None) if not msg.author.bot]
+                    messages = [msg async for msg in config_channel.history(limit=None)]
                     config_data = parse_ini_data(messages) # Use the parsing function
                     logger.info(f"[API] Parsed {len(config_data)} sections from {CONFIG_CHANNEL_NAME}")
 
