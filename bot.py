@@ -114,8 +114,8 @@ MSG_1_INFO_CHANNEL_NAME = (
 MSG_2_INFO_CHANNEL_NAME = (
     "ㅤ\n"
     "# Documentation\n\n"
-    "ClanTracker OSRS <:GitHub:1362721053713109015> [**LINK**]({GITHUB_APP_README_MD_LINK})\n"
-    "ClanTracker OSRS Discord Bot <:GitHub:1362721053713109015> [**LINK**]({GITHUB_BOT_README_MD_LINK})\n\n\n"
+    "ClanTracker OSRS <:GitHub:1362771893131804905> [**LINK**]({GITHUB_APP_README_MD_LINK})\n"
+    "ClanTracker OSRS Discord Bot <:GitHub:1362771893131804905> [**LINK**]({GITHUB_BOT_README_MD_LINK})\n\n\n"
     "# [Official Discord]({OFFICIAL_DISCORD_LINK})"
 )
 
@@ -152,7 +152,7 @@ MSG_1_MANUAL_POINTS_CHANNEL_NAME = (
     "thinks_forestry_was_top_notch_update = true\n"
     "```\n"
     "etc...\n\n"
-    "Documentation <:GitHub:1362721053713109015> [**LINK**]({GITHUB_APP_README_MD_LINK})\n\n"
+    "Documentation <:GitHub:1362771893131804905> [**LINK**]({GITHUB_APP_README_MD_LINK})\n\n"
     "## ***REMOVE THIS MESSAGE***\n\n"
     "-# Leave this channel empty if you're not using manual points."
 )
@@ -163,7 +163,7 @@ MSG_1_MANUAL_POINTS_CHANNEL_NAME = (
 MSG_1_COMMANDS_CHANNEL_NAME = (
     "Bot commands for ClanTracker should be used in this channel.\n"
     "Type `/` to see available commands.\n\n"
-    "Documentation <:GitHub:1362721053713109015> [**LINK**]({GITHUB_BOT_README_MD_LINK})"
+    "Documentation <:GitHub:1362771893131804905> [**LINK**]({GITHUB_BOT_README_MD_LINK})"
 )
 
 # --- Structure Defining Which Messages Go Where ---
