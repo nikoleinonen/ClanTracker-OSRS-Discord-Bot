@@ -135,3 +135,5 @@ celerybeat.pid
 /site
 # Cython debug symbols
 cython_debug/
+
+test/
