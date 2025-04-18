@@ -343,6 +343,7 @@ class ClanTrackerClient(discord.Client):
         super().__init__(intents=intents)
         self.tree = app_commands.CommandTree(self)
         self.web_server_task = None # To hold the web server task
+        self.authorized_user_ids: Set[str] = set()
 
     async def setup_hook(self) -> None:
         """Called after login but before connecting to the Gateway. Ideal for setup."""
@@ -1090,11 +1091,6 @@ def is_authorized_user():
     async def predicate(interaction: discord.Interaction) -> bool:
         global AUTHORIZED_USER_IDS_SET # Access the global set populated at startup
 
-
-        # Use !r for unambiguous representation (shows quotes for strings in set)
-        logger.debug(f"Inside is_authorized_user check. Current AUTHORIZED_USER_IDS_SET: {AUTHORIZED_USER_IDS_SET!r}")
-
-
         if not AUTHORIZED_USER_IDS_SET:
             logger.error(f"Authorization check failed: AUTHORIZED_USER_IDS environment variable is not set or empty. Denying access to '/{interaction.command.name if interaction.command else 'unknown'}' for user {interaction.user} (ID: {interaction.user.id}).")
             try:
@@ -1504,9 +1500,8 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
 
 
 # --- Bot Start Function ---
-def prepare_bot() -> bool:
+def prepare_bot() -> Tuple[bool, Set[str]]:
     """Checks essential configuration and loads initial data."""
-    global AUTHORIZED_USERNAMES
 
     logger.info("Preparing bot...")
     # Check for required environment variables
@@ -1525,38 +1520,38 @@ def prepare_bot() -> bool:
     if not STATUS_GUILD_ID or not STATUS_CHANNEL_ID:
         logger.warning("STATUS_GUILD_ID or STATUS_CHANNEL_ID environment variables not set. Dynamic status updates will be disabled.")
 
+    local_authorized_ids_set: Set[str] = set() # Use a local variable
+
     # --- Log Database Inspection Status ---
     if INSPECT_DB_GUILD_ID and INSPECT_DB_CHANNEL_ID:
         logger.info(f"Database inspection command (/database) enabled for Guild ID {INSPECT_DB_GUILD_ID}, Channel ID {INSPECT_DB_CHANNEL_ID}.")
 
-        # --- Process Authorized User IDs ---
         if AUTHORIZED_USER_IDS_STR:
             raw_ids = [uid.strip() for uid in AUTHORIZED_USER_IDS_STR.split(',')]
             valid_ids = set()
             invalid_entries = []
             for uid in raw_ids:
-                if uid.isdigit(): # Check if the string contains only digits
+                if uid.isdigit():
                     valid_ids.add(uid)
-                elif uid: # Log non-empty but invalid entries
+                elif uid:
                     invalid_entries.append(uid)
 
-            AUTHORIZED_USER_IDS_SET = valid_ids # Store the validated IDs
+            local_authorized_ids_set = valid_ids # Assign to local variable
 
-            if AUTHORIZED_USER_IDS_SET:
-                 logger.info(f"Database commands restricted to User IDs: {', '.join(sorted(list(AUTHORIZED_USER_IDS_SET)))}")
+            if local_authorized_ids_set:
+                 logger.info(f"Database commands restricted to User IDs: {', '.join(sorted(list(local_authorized_ids_set)))}")
                  if invalid_entries:
                       logger.warning(f"Invalid entries found in AUTHORIZED_USER_IDS and ignored: {', '.join(invalid_entries)}")
             else:
                  logger.error("AUTHORIZED_USER_IDS environment variable was set, but contained no valid User IDs after parsing. Database commands will be inaccessible.")
                  if invalid_entries:
                       logger.error(f"Invalid entries found: {', '.join(invalid_entries)}")
-
         else:
             logger.error("AUTHORIZED_USER_IDS environment variable is not set. Database commands will be inaccessible.")
-            AUTHORIZED_USER_IDS_SET = set() # Ensure it's an empty set if not configured
-
+            # local_authorized_ids_set remains empty
     else:
-        logger.warning("Database inspection command (/database) is disabled. Set INSPECT_DATABASE_GUILD_ID and INSPECT_DATABASE_CHANNEL_ID environment variables to enable.")
+        logger.warning("Database inspection command (/database) is disabled...")
+        # local_authorized_ids_set remains empty
 
     # Ensure src/responses directory exists for hyd command
     try:
@@ -1566,15 +1561,26 @@ def prepare_bot() -> bool:
         logger.error(f"Could not create responses directory '{RESPONSES_DIR}': {e}", exc_info=True)
 
     logger.info("Bot preparation complete.")
-    return True
+    # Return success and the processed set
+    return (TOKEN is not None), local_authorized_ids_set
 
 # --- Main Execution Block ---
 if __name__ == "__main__":
-    if prepare_bot():
+    # Instantiate the client FIRST
+    client = ClanTrackerClient(intents=intents)
+    tree = client.tree # Make tree accessible
+
+    # Prepare the bot and get the authorized IDs
+    preparation_success, authorized_ids = prepare_bot() # <--- Capture return values
+
+    if preparation_success:
+        # Assign the prepared IDs to the client instance
+        client.authorized_user_ids = authorized_ids # <--- Assign here
+        logger.debug(f"[Main] Assigned authorized IDs to client instance: {client.authorized_user_ids!r}")
+
         logger.info("Starting bot and web server...")
         try:
-            # Run the client using the subclass and its setup_hook
-            # log_handler=None prevents discord.py from setting up its own root logger handlers
+            # Run the client
             client.run(TOKEN, log_handler=None)
         except discord.PrivilegedIntentsRequired as e:
             logger.critical("\n" + "="*60 +
