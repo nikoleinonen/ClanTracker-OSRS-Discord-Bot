@@ -1090,6 +1090,11 @@ def is_authorized_user():
     async def predicate(interaction: discord.Interaction) -> bool:
         global AUTHORIZED_USER_IDS_SET # Access the global set populated at startup
 
+
+        # Use !r for unambiguous representation (shows quotes for strings in set)
+        logger.debug(f"Inside is_authorized_user check. Current AUTHORIZED_USER_IDS_SET: {AUTHORIZED_USER_IDS_SET!r}")
+
+
         if not AUTHORIZED_USER_IDS_SET:
             logger.error(f"Authorization check failed: AUTHORIZED_USER_IDS environment variable is not set or empty. Denying access to '/{interaction.command.name if interaction.command else 'unknown'}' for user {interaction.user} (ID: {interaction.user.id}).")
             try:
