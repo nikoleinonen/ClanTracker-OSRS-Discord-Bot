@@ -1,5 +1,6 @@
 import discord
 from discord import app_commands
+from discord.app_commands import Choice
 from dotenv import load_dotenv
 import os
 import json
@@ -13,6 +14,7 @@ from typing import Dict, Optional, Set, Tuple, List, Any
 import random
 from collections import OrderedDict
 from aiohttp import web
+import io
 
 # --- Logging Setup (Stream Only for Production) ---
 log_formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(name)s: %(message)s')
@@ -36,7 +38,7 @@ load_dotenv() # (Local Development Only)
 
 # Bot Settings
 TOKEN: Optional[str] = os.getenv('DISCORD_BOT_TOKEN')
-CATEGORY_NAME: str = os.getenv('CLANTRACKER_CATEGORY_NAME', "ClanTracker-OSRS")
+CATEGORY_NAME: str = os.getenv('CLANTRACKER_CATEGORY_NAME', "ClanTracker")
 INFO_CHANNEL_NAME: str = os.getenv('CLANTRACKER_INFO_CHANNEL', "ct-info")
 CONFIG_CHANNEL_NAME: str = os.getenv('CLANTRACKER_CONFIG_CHANNEL', "ct-config")
 MANUAL_POINTS_CHANNEL_NAME: str = os.getenv('CLANTRACKER_MANUAL_POINTS_CHANNEL', "ct-manual-points")
@@ -55,14 +57,17 @@ STATUS_GUILD_ID: Optional[int] = int(STATUS_GUILD_ID_STR) if STATUS_GUILD_ID_STR
 STATUS_CHANNEL_ID: Optional[int] = int(STATUS_CHANNEL_ID_STR) if STATUS_CHANNEL_ID_STR and STATUS_CHANNEL_ID_STR.isdigit() else None
 DEFAULT_STATUS_MESSAGE: str = os.getenv('DEFAULT_BOT_STATUS', ":wine_glass:")
 
-# --- Database Inspection Configuration ---
+# --- Database Configuration ---
 INSPECT_DB_GUILD_ID_STR: Optional[str] = os.getenv('INSPECT_DATABASE_GUILD_ID')
 INSPECT_DB_CHANNEL_ID_STR: Optional[str] = os.getenv('INSPECT_DATABASE_CHANNEL_ID')
 INSPECT_DB_GUILD_ID: Optional[int] = int(INSPECT_DB_GUILD_ID_STR) if INSPECT_DB_GUILD_ID_STR and INSPECT_DB_GUILD_ID_STR.isdigit() else None
 INSPECT_DB_CHANNEL_ID: Optional[int] = int(INSPECT_DB_CHANNEL_ID_STR) if INSPECT_DB_CHANNEL_ID_STR and INSPECT_DB_CHANNEL_ID_STR.isdigit() else None
 
+AUTHORIZED_USERS_STR: Optional[str] = os.getenv('AUTHORIZED_USERS')
+AUTHORIZED_USERNAMES: Set[str] = set() # Initialize as empty set
+
 # Data Storage
-DATA_DIR: str = "/data"
+DATA_DIR: str = os.getenv('DATA_DIR', 'data')
 IDENTIFIER_FILE_NAME: str = "clan_identifiers.json"
 IDENTIFIER_FILE: str = os.path.join(DATA_DIR, IDENTIFIER_FILE_NAME)
 IDENTIFIER_LENGTH: int = 8
@@ -73,180 +78,115 @@ HYD_FILE_NAME: str = "hyd.txt"
 HYD_FILE_PATH: str = os.path.join(RESPONSES_DIR, HYD_FILE_NAME)
 
 # External Links
-GITHUB_README_MD_LINK: str = os.getenv('GITHUB_README_MD_LINK', "https://github.com/YOUR_USERNAME/YOUR_REPO/blob/main/info.md") # <-- TODO: Set this in Railway env vars!
+GITHUB_APP_README_MD_LINK: str = os.getenv('GITHUB_APP_README_MD_LINK', "")
+GITHUB_BOT_README_MD_LINK: str = os.getenv('GITHUB_BOT_README_MD_LINK', "")
+OFFICIAL_DISCORD_LINK: str = os.getenv('OFFICIAL_DISCORD_LINK', "https://discord.gg/y4tmVW9p")
 
 # Bot Discord Permissions
-# -> Manage Channels, View Channels, Send Messages, Read Message History
-BOT_PERMISSIONS: int = 68624
+# -> Manage Channels, View Channels, Send Messages, Read Message History, Manage Messages
+BOT_PERMISSIONS: int = 76816
 
 # --- Global Storage for Identifiers ---
 server_identifiers: Dict[str, Dict[str, str]] = {}
 
+
 # --- Initial Message Content Constants ---
-# Keep all MSG_... constants as they are, but ensure they use the channel name variables
-MSG_INFO_WELCOME = (
-    "**Thank you for using ClanTracker OSRS!**\n\n"
-    "Your unique Clan Identifier: `{clan_identifier}`\n"
-    "(Share this with your clan members for the desktop application)\n\n"
-    f"I have automatically created channels for you under the **{CATEGORY_NAME}** category:\n"
-    f"1.  `#{INFO_CHANNEL_NAME}`: General information and guides.\n"
-    f"2.  `#{CONFIG_CHANNEL_NAME}`: Stores settings for your clan's desktop application.\n"
-    f"3.  `#{MANUAL_POINTS_CHANNEL_NAME}`: Used for manual points.\n"
-    f"4.  `#{COMMANDS_CHANNEL_NAME}`: Bot commands must be used here."
+# These constants define the text content for messages sent on guild join.
+# They use .format() placeholders like {variable_name} which will be filled in later.
+# Naming Convention: MSG_{Number}_{ChannelVariableName}
+
+# ------------------------------------------------------
+# === Messages for INFO_CHANNEL_NAME ('ct-info') ===
+# ------------------------------------------------------
+MSG_1_INFO_CHANNEL_NAME = (
+    "# **Thank you for using ClanTracker OSRS!**\n"
+    "**--------------------------------------------------------------**\n"
+    "### Your unique Clan Identifier: `{clan_identifier}`\n"
+    "-# Share this with your clan members!\n\n\n"
+    "I have automatically created text channels for you under **{CATEGORY_NAME}** category:\n"
+    "1. `#{INFO_CHANNEL_NAME}`\n"
+    "2. `#{CONFIG_CHANNEL_NAME}`\n"
+    "3. `#{MANUAL_POINTS_CHANNEL_NAME}`\n"
+    "4. `#{COMMANDS_CHANNEL_NAME}`\n"
+    "ㅤ"
 )
-MSG_INFO_CONFIG_INTRO = (
-    "------------------------------------\n"
-    f"**About `#{CONFIG_CHANNEL_NAME}`:**\n\n"
-    f"`#{CONFIG_CHANNEL_NAME}` is where you define the global settings for your clan's ClanTracker application. Clan leaders should edit messages here following the specified format.\n\n"
-    "Settings are defined in `INI` format within messages in that channel. The desktop app will fetch these settings by using the Clan Identifier.\n\n"
-    "**Configuration Sections Overview:**"
+
+MSG_2_INFO_CHANNEL_NAME = (
+    "ㅤ\n"
+    "# Documentation\n\n"
+    "ClanTracker OSRS <:GitHub:1362721053713109015> [**LINK**]({GITHUB_APP_README_MD_LINK})\n"
+    "ClanTracker OSRS Discord Bot <:GitHub:1362721053713109015> [**LINK**]({GITHUB_BOT_README_MD_LINK})\n\n\n"
+    "# [Official Discord]({OFFICIAL_DISCORD_LINK})"
 )
-MSG_INFO_CONFIG_TEMPLE = (
+
+# ------------------------------------------------------
+# === Messages for CONFIG_CHANNEL_NAME ('ct-config') ===
+# ------------------------------------------------------
+MSG_1_CONFIG_CHANNEL_NAME = (
     "```ini\n"
-    "[templeosrs_group_id]\n"
-    "# Your templeOSRS group ID. Found at the end of your group's TempleOSRS URL.\n"
-    "# Example: https://templeosrs.com/groups/overview.php?id=YOUR_ID_HERE\n"
-    "templeosrs_group_id = YOUR_ID_HERE\n"
+    "[discord]\n"
+    "clan_identifier = {clan_identifier}\n"
     "```"
 )
-MSG_INFO_CONFIG_THEME = (
+
+# --------------------------------------------------------------------
+# === Messages for MANUAL_POINTS_CHANNEL_NAME ('ct-manual-points') ===
+# --------------------------------------------------------------------
+MSG_1_MANUAL_POINTS_CHANNEL_NAME = (
+    "# **Manual Points**\n\n"
+    "Post manual points here. **Use one message per player.** Edit the existing message to update that player's info!\n"
+    "-# Updates are not sent automatically, users must manually update the data or restart the application.\n\n"
+    "**Format and example of 2 different players:**\n"
     "```ini\n"
-    "[theme]\n"
-    "# Set your clan's theme for the application.\n"
-    "# Use hex color codes (#RRGGBB).\n"
-    "background_color_custom = #0E0E0E\n"
-    "menu_color_custom = #151515\n"
-    "accent_color_custom = #124080\n"
-    "selected_color_custom = #0d3265\n"
-    "txt_color_custom = #D2D2D2\n"
-    "```"
-)
-MSG_INFO_CONFIG_RANKS = (
-    "```ini\n"
-    "[ranks]\n"
-    "# Define clan ranks based on total points.\n"
-    "# rank_thresholds: Comma-separated list of minimum points for each rank (lowest first).\n"
-    "# rank_titles: Comma-separated list of rank names (matching thresholds, lowest first).\n"
-    "# num_ranks: Total number of ranks defined (must match list lengths).\n"
-    "rank_thresholds = 0, 5, 10, 20, 40, 60, 80, 120, 160, 180, 200\n"
-    "rank_titles = Burger, Rank 1, Rank 2, Rank 3, Rank 4, Rank 5, Rank 6, Rank 7, Rank 8, Rank 9, Rank 10\n"
-    "num_ranks = 11\n"
-    "```"
-)
-MSG_INFO_CONFIG_RECORDS = (
-    "```ini\n"
-    "[records_include]\n"
-    "# Which time-based TempleOSRS records should contribute to the 'Records Held' count?\n"
-    "# Set to 'true' to include, 'false' to exclude.\n"
-    "6h = true\n"
-    "day = false\n"
-    "72h = false\n"
-    "week = false\n"
-    "month = false\n"
-    "year = false\n"
-    "```"
-)
-MSG_INFO_CONFIG_CUSTOMKEYS = (
-    "```ini\n"
-    "[custom_keys]\n"
-    "# Define custom keys/flags for members. Useful for points requiring combined data.\n"
-    "# These can group related activities (e.g., different raid types).\n"
-    "# Default examples (you can modify or add your own):\n"
-    "burger_raids = chambers of xeric, tombs of amascut, theatre of blood\n"
-    "regular_raids = chambers of xeric, theatre of blood, tombs of amascut expert\n"
-    "cm_raids = chambers of xeric challenge mode, theatre of blood challenge mode\n"
-    "all_raids = chambers of xeric, chambers of xeric challenge mode, theatre of blood, theatre of blood challenge mode, tombs of amascut, tombs of amascut expert\n"
-    "```"
-)
-MSG_INFO_CONFIG_VISIBLE = (
-    "```ini\n"
-    "[visible_categories]\n"
-    "# Which data categories to display on the 'Members' tab in the application.\n"
-    "# Format: internal_key | Display Name = true\n"
-    "# Default visible categories are already set in the application's base config.\n"
-    "# You can override or add more here.\n"
-    "total_level | Total Level = true\n"
-    "total_xp | Total XP = true\n"
-    "```"
-)
-MSG_INFO_CONFIG_HIDDEN = (
-    "```ini\n"
-    "[hidden_categories]\n"
-    "# This section in the base config lists all available categories you *can* show.\n"
-    "# To see the full list of available categories, please refer to the info.md file\n"
-    f"# on the project's GitHub page: {GITHUB_README_MD_LINK}\n"
-    "# To make a hidden category visible, copy its line to the [visible_categories]\n"
-    "# section above and set its value to 'true'.\n"
-    "# Example (if you wanted to show EHP):\n"
-    "# ehp | EHP = true  (<- Add this line under [visible_categories])\n"
-    "```"
-)
-MSG_INFO_CONFIG_POINTS = (
-    "```ini\n"
-    "[points_CATEGORY_NAME]\n"
-    "# Define point values for different achievements or stats.\n"
-    "# Replace CATEGORY_NAME with a descriptive name (e.g., points_skills, points_bossing).\n"
-    "# Format depends on the point type.\n"
-    "# Example: [points_capes]\n"
-    "# quest_cape = 10\n"
-    "```\n\n"
-    "**Detailed Point Configuration:**\n"
-    "For comprehensive details on how to configure the `[points_...]` sections, please refer to the `info.md` file in the project's GitHub repository. Reading it directly on GitHub is recommended for better formatting:\n"
-    f"{GITHUB_README_MD_LINK}\n"
-)
-MSG_INFO_MANUAL_POINTS_EXPLAIN = (
-    "------------------------------------\n"
-    f"**About `#{MANUAL_POINTS_CHANNEL_NAME}`:**\n\n"
-    "This channel is used to record points for achievements or activities that **cannot** be automatically tracked via APIs (like Wise Old Man, TempleOSRS, CollectionLog.net, HiScores etc.).\n\n"
-    "**Format (Strictly ONE message per player):**\n"
-    "Clan leaders (or designated members) should post **one message per player** in this channel using the following INI format:\n"
-    "```ini\n"
-    "[PlayerRSN]\n"
-    "# Replace PlayerRSN with the player's exact RuneScape Name\n"
-    "\n"
-    "# Use the specific achievement keys defined by your clan leadership\n"
-    f"# These keys might be defined in #{CONFIG_CHANNEL_NAME} or clan documentation\n"
-    "quest_cape = true\n"
-    "diary_cape = true\n"
-    "infernal_cape_attempts = 5\n"
-    "clan_event_participation = 12\n"
-    "# Add other manual points as needed...\n"
-    "```\n\n"
-    "**Important Instructions:**\n"
-    "- **One Message Per Player:** Do NOT post multiple messages for the same player.\n"
-    "- **Edit to Update:** To change a player's manual points, **EDIT** their existing message in this channel. Do not post a new one.\n"
-    "- **Accuracy:** Ensure RuneScape Names (RSNs) are spelled correctly, including spaces and capitalization, as they appear in-game.\n"
-    "- **Permissions:** Consider setting channel permissions so only specific roles (e.g., Leaders, Admins) can post or edit messages here to maintain data integrity.\n\n"
-    "The desktop application will read all messages in this channel and parse the points based on these entries.\n\n"
-    "------------------------------------\n"
-    "Need help? Ask in your clan's support channel or check the project documentation."
-)
-MSG_CONFIG_INTRO = (
-    "**ClanTracker Configuration**\n\n"
-    "This channel stores the settings for your clan that the desktop application will use.\n\n"
-    "**Instructions for Clan Leaders:**\n"
-    f"1.  Define your clan settings here using `INI` format within messages (see `#{INFO_CHANNEL_NAME}` for examples).\n"
-    "2.  **Example:** `[templeosrs_group_id]\ntempleosrs_group_id = YOUR_ID_HERE` (Replace with your actual TempleOSRS group ID).\n"
-    "3.  The desktop application will fetch these settings when a user provides the clan identifier.\n\n"
-    "**Important:** Only clan leaders should modify messages here. Consider adjusting channel permissions accordingly."
-)
-MSG_CONFIG_IDENTIFIER = (
-    "------------------------------------\n"
-    "**Your unique Clan Identifier is:** `{clan_identifier}`\n"
-    "Share this identifier **only** with your clan members. They will need it for the ClanTracker desktop application.\n"
-    "------------------------------------"
-)
-MSG_MANUAL_POINTS_INTRO = (
-    "**Manual Point Submissions**\n\n"
-    "Post player points here. **One message per player.** Edit existing messages to update.\n\n"
-    "**Format:**\n"
-    "```ini\n"
-    "[PlayerRSN]\n"
-    "key1 = value1\n"
-    "key2 = value2\n"
+    "[TurboGigaChad21]\n"
+    "grandmaster_ca = true\n"
+    "has_life = false\n"
+    "killed_zuk_blindfolded = true\n"
+    "thinks_forestry_was_top_notch_update = false\n"
     "```\n"
-    f"*(See `#{INFO_CHANNEL_NAME}` for detailed instructions and keys)*"
+    "```ini\n"
+    "[Burger73]\n"
+    "grandmaster_ca = false\n"
+    "has_life = true\n"
+    "killed_zuk_blindfolded = false\n"
+    "thinks_forestry_was_top_notch_update = true\n"
+    "```\n"
+    "etc...\n\n"
+    "Documentation <:GitHub:1362721053713109015> [**LINK**]({GITHUB_APP_README_MD_LINK})\n\n"
+    "## ***REMOVE THIS MESSAGE***\n\n"
+    "-# Leave this channel empty if you're not using manual points."
 )
+
+# ----------------------------------------------------------
+# === Messages for COMMANDS_CHANNEL_NAME ('ct-commands') ===
+# ----------------------------------------------------------
+MSG_1_COMMANDS_CHANNEL_NAME = (
+    "Bot commands for ClanTracker should be used in this channel.\n"
+    "Type `/` to see available commands.\n\n"
+    "Documentation <:GitHub:1362721053713109015> [**LINK**]({GITHUB_BOT_README_MD_LINK})"
+)
+
+# --- Structure Defining Which Messages Go Where ---
+# This dictionary maps the channel name VARIABLE to a list of message constants
+# defined above, in the order they should be sent.
+# TO EDIT MESSAGES:
+# 1. Change the content in the MSG_... constants above.
+# 2. Add/Remove/Reorder the constants in the lists below.
+INITIAL_MESSAGES_BY_CHANNEL: Dict[str, List[str]] = {
+    INFO_CHANNEL_NAME: [
+        MSG_1_INFO_CHANNEL_NAME,
+        MSG_2_INFO_CHANNEL_NAME
+    ],
+    CONFIG_CHANNEL_NAME: [
+        MSG_1_CONFIG_CHANNEL_NAME
+    ],
+    MANUAL_POINTS_CHANNEL_NAME: [
+        MSG_1_MANUAL_POINTS_CHANNEL_NAME,
+    ],
+    COMMANDS_CHANNEL_NAME: [
+        MSG_1_COMMANDS_CHANNEL_NAME,
+    ]
+}
 
 
 # --- Helper Functions (Bot & API) ---
@@ -305,6 +245,14 @@ def find_guild_id_by_identifier(clan_identifier: str) -> Optional[str]:
     for guild_id, data in server_identifiers.items():
         if data.get('identifier') == clan_identifier:
             return guild_id
+    return None
+
+def find_guild_info_by_identifier(clan_identifier: str) -> Optional[Tuple[str, str]]:
+    """Finds the Guild ID string and Guild Name associated with a clan identifier."""
+    global server_identifiers
+    for guild_id, data in server_identifiers.items():
+        if data.get('identifier') == clan_identifier:
+            return guild_id, data.get('name', 'Unknown Name') # Return ID and Name
     return None
 
 def clean_message_content(content: str) -> str:
@@ -702,8 +650,6 @@ async def update_status_from_channel(bot_client: ClanTrackerClient) -> None:
 
 
 # --- Guild Join Helper Functions ---
-# (Keep _notify_permission_error, _setup_category_and_channels, _ensure_identifier, _send_initial_messages functions exactly as they were in the original bot.py)
-# ... Make sure they use the correct channel name variables ...
 async def _notify_permission_error(guild: discord.Guild, permission_needed: str, action: str) -> None:
     error_message = (
         f"Error: I need the '{permission_needed}' permission to {action} in the server '{guild.name}'. "
@@ -824,117 +770,224 @@ async def _ensure_identifier(guild: discord.Guild) -> Optional[str]:
 
     return clan_identifier
 
+# --- _send_initial_messages function ---
 async def _send_initial_messages(
     guild: discord.Guild,
     channels: Dict[str, Optional[discord.TextChannel]],
     clan_identifier: str
 ) -> None:
+    """Sends the pre-defined initial messages to the appropriate channels if they are empty."""
     logger.info(f"Attempting to send initial content to channels in '{guild.name}'...")
 
-    async def send_safe(channel: Optional[discord.TextChannel], content: str, channel_var_name: str):
+    # Helper function to safely send a message
+    async def send_safe(channel: Optional[discord.TextChannel], content: str, channel_name_for_log: str):
         if not channel:
-            logger.warning(f"Cannot send message because channel object for {channel_var_name} is None in '{guild.name}'.")
+            logger.warning(f"Cannot send message because channel object for '{channel_name_for_log}' is None in '{guild.name}'.")
             return False
         if not channel.permissions_for(guild.me).send_messages:
-            logger.warning(f"Missing 'Send Messages' permission in #{channel.name} ({channel_var_name}) for guild '{guild.name}'.")
+            logger.warning(f"Missing 'Send Messages' permission in #{channel.name} ('{channel_name_for_log}') for guild '{guild.name}'.")
             return False
         try:
-            await channel.send(content)
+            await channel.send(content, suppress_embeds=True)
             return True
         except discord.Forbidden:
-            logger.error(f"Missing 'Send Messages' permission in #{channel.name} ({channel_var_name}) for guild '{guild.name}' despite initial check.")
+            logger.error(f"Missing 'Send Messages' permission in #{channel.name} ('{channel_name_for_log}') for guild '{guild.name}' despite initial check.")
             return False
         except discord.HTTPException as e:
-             logger.error(f"HTTP error sending message to #{channel.name} ({channel_var_name}) in '{guild.name}': {e}", exc_info=True)
+             logger.error(f"HTTP error sending message to #{channel.name} ('{channel_name_for_log}') in '{guild.name}': {e}", exc_info=True)
              return False
         except Exception as e:
-            logger.error(f"Unexpected error sending message to #{channel.name} ({channel_var_name}) in '{guild.name}': {e}", exc_info=True)
+            logger.error(f"Unexpected error sending message to #{channel.name} ('{channel_name_for_log}') in '{guild.name}': {e}", exc_info=True)
             return False
 
-    async def is_channel_empty(channel: Optional[discord.TextChannel], channel_var_name: str) -> bool:
-        if not channel: return True
+    # Helper function to check if a channel is empty
+    async def is_channel_empty(channel: Optional[discord.TextChannel], channel_name_for_log: str) -> bool:
+        if not channel: return True # Treat non-existent channel as "empty" for skipping purposes
         if not channel.permissions_for(guild.me).read_message_history:
-             logger.warning(f"Missing 'Read Message History' in #{channel.name} ({channel_var_name}). Assuming channel is not empty.")
+             logger.warning(f"Missing 'Read Message History' in #{channel.name} ('{channel_name_for_log}'). Assuming channel is not empty.")
              return False
         try:
+            # Fetch exactly one message. If it exists, the channel is not empty.
             history = [msg async for msg in channel.history(limit=1)]
-            return not history
+            is_empty = not history
+            logger.debug(f"Channel #{channel.name} ('{channel_name_for_log}') history check: {'Empty' if is_empty else 'Not Empty'}")
+            return is_empty
         except (discord.Forbidden, discord.HTTPException) as e:
-             logger.error(f"Error checking history for #{channel.name} ({channel_var_name}): {e}. Assuming not empty.")
+             logger.error(f"Error checking history for #{channel.name} ('{channel_name_for_log}'): {e}. Assuming not empty.")
+             return False
+        except Exception as e:
+             logger.error(f"Unexpected error checking history for #{channel.name} ('{channel_name_for_log}'): {e}. Assuming not empty.", exc_info=True)
              return False
 
-    # --- Send to Info Channel ---
-    info_channel = channels.get(INFO_CHANNEL_NAME)
-    if info_channel and await is_channel_empty(info_channel, "INFO_CHANNEL_NAME"):
-        logger.info(f"Sending initial messages to #{INFO_CHANNEL_NAME} in '{guild.name}'.")
-        messages_to_send = [
-            MSG_INFO_WELCOME.format(
-                clan_identifier=clan_identifier, CATEGORY_NAME=CATEGORY_NAME,
-                INFO_CHANNEL_NAME=INFO_CHANNEL_NAME, CONFIG_CHANNEL_NAME=CONFIG_CHANNEL_NAME,
-                MANUAL_POINTS_CHANNEL_NAME=MANUAL_POINTS_CHANNEL_NAME, COMMANDS_CHANNEL_NAME=COMMANDS_CHANNEL_NAME
-            ),
-            MSG_INFO_CONFIG_INTRO.format(CONFIG_CHANNEL_NAME=CONFIG_CHANNEL_NAME),
-            MSG_INFO_CONFIG_TEMPLE, MSG_INFO_CONFIG_THEME, MSG_INFO_CONFIG_RANKS,
-            MSG_INFO_CONFIG_RECORDS, MSG_INFO_CONFIG_CUSTOMKEYS, MSG_INFO_CONFIG_VISIBLE,
-            MSG_INFO_CONFIG_HIDDEN.format(GITHUB_README_MD_LINK=GITHUB_README_MD_LINK),
-            MSG_INFO_CONFIG_POINTS.format(GITHUB_README_MD_LINK=GITHUB_README_MD_LINK),
-            MSG_INFO_MANUAL_POINTS_EXPLAIN.format(
-                CONFIG_CHANNEL_NAME=CONFIG_CHANNEL_NAME, MANUAL_POINTS_CHANNEL_NAME=MANUAL_POINTS_CHANNEL_NAME
-            )
-        ]
-        success_count = 0
-        for i, msg_content in enumerate(messages_to_send):
-            if await send_safe(info_channel, msg_content, "INFO_CHANNEL_NAME"):
-                success_count += 1
-                if i < len(messages_to_send) - 1: await asyncio.sleep(0.8)
+    # Prepare all variables needed for formatting the message templates
+    format_kwargs = {
+        "clan_identifier": clan_identifier,
+        "CATEGORY_NAME": CATEGORY_NAME,
+        "INFO_CHANNEL_NAME": INFO_CHANNEL_NAME,
+        "CONFIG_CHANNEL_NAME": CONFIG_CHANNEL_NAME,
+        "MANUAL_POINTS_CHANNEL_NAME": MANUAL_POINTS_CHANNEL_NAME,
+        "COMMANDS_CHANNEL_NAME": COMMANDS_CHANNEL_NAME,
+        "GITHUB_APP_README_MD_LINK": GITHUB_APP_README_MD_LINK,
+        "GITHUB_BOT_README_MD_LINK": GITHUB_BOT_README_MD_LINK,
+        "OFFICIAL_DISCORD_LINK": OFFICIAL_DISCORD_LINK,
+    }
+
+    # Iterate through the defined structure (INITIAL_MESSAGES_BY_CHANNEL)
+    for channel_name_var, message_constants_list in INITIAL_MESSAGES_BY_CHANNEL.items():
+        channel_object = channels.get(channel_name_var) # Get the actual discord.TextChannel object
+
+        if not channel_object:
+            logger.warning(f"Could not find or create channel for variable '{channel_name_var}' in '{guild.name}'. Skipping initial messages for it.")
+            continue # Skip to the next channel in the structure
+
+        actual_channel_name = channel_object.name # For logging
+
+        if await is_channel_empty(channel_object, actual_channel_name):
+            logger.info(f"Channel #{actual_channel_name} is empty. Sending initial messages...")
+            success_count = 0
+            total_messages = len(message_constants_list)
+
+            for i, message_template in enumerate(message_constants_list):
+                try:
+                    # Format the message template using all available variables
+                    formatted_content = message_template.format(**format_kwargs)
+                except KeyError as e:
+                    logger.error(f"Formatting error in message template for #{actual_channel_name} (message {i+1}/{total_messages}). Missing key: {e}. Sending raw template.")
+                    formatted_content = f"⚠️ **Bot Error:** Missing formatting key `{e}`.\nRaw content:\n```\n{message_template}\n```"
+                except Exception as e:
+                     logger.error(f"Unexpected formatting error in message template for #{actual_channel_name} (message {i+1}/{total_messages}): {e}. Sending raw template.", exc_info=True)
+                     formatted_content = f"⚠️ **Bot Error:** Unexpected formatting error.\nRaw content:\n```\n{message_template}\n```"
+
+
+                if await send_safe(channel_object, formatted_content, actual_channel_name):
+                    success_count += 1
+                    # Add a small delay between messages to avoid rate limits and allow users to read
+                    if i < total_messages - 1:
+                        await asyncio.sleep(0.8)
+                else:
+                    logger.error(f"Failed to send message {i+1}/{total_messages} to #{actual_channel_name}. Stopping message dump for this channel.")
+                    # Send a fallback error message if possible
+                    await send_safe(channel_object,
+                        f"**Welcome to ClanTracker OSRS!**\nYour identifier: `{clan_identifier}`.\n"
+                        f"An error occurred sending the full setup info to this channel (#{actual_channel_name}). Please ensure the bot has 'Send Messages' permission here.",
+                        actual_channel_name
+                    )
+                    break # Stop sending messages to THIS channel if one fails
+
+            if success_count == total_messages:
+                logger.info(f"Successfully sent all {total_messages} initial messages to #{actual_channel_name}.")
             else:
-                logger.error(f"Failed to send message {i+1} to #{INFO_CHANNEL_NAME}. Stopping info message dump.")
-                await send_safe(info_channel,
-                    f"**Welcome to ClanTracker OSRS!**\nYour identifier: `{clan_identifier}`.\n"
-                    f"An error occurred sending the full setup info. Please give proper server permissions when inviting: (Manage Channels, View Channels, Send Messages, Read Message History).",
-                    "INFO_CHANNEL_NAME"
-                )
-                break
-        if success_count == len(messages_to_send):
-             logger.info(f"Finished sending initial messages to #{INFO_CHANNEL_NAME} in '{guild.name}'.")
-    elif info_channel:
-         logger.info(f"Channel #{INFO_CHANNEL_NAME} in '{guild.name}' is not empty or history check failed. Skipping initial message dump.")
-    else:
-         logger.warning(f"Could not find or create #{INFO_CHANNEL_NAME} channel in '{guild.name}'. Cannot send info messages.")
+                 logger.warning(f"Sent {success_count}/{total_messages} messages to #{actual_channel_name} before encountering an issue.")
 
-    # --- Send to Config Channel ---
-    config_channel = channels.get(CONFIG_CHANNEL_NAME)
-    if config_channel and await is_channel_empty(config_channel, "CONFIG_CHANNEL_NAME"):
-         logger.info(f"Sending initial messages to #{CONFIG_CHANNEL_NAME} in '{guild.name}'.")
-         await send_safe(config_channel, MSG_CONFIG_INTRO.format(INFO_CHANNEL_NAME=INFO_CHANNEL_NAME), "CONFIG_CHANNEL_NAME")
-         await asyncio.sleep(0.5)
-         await send_safe(config_channel, MSG_CONFIG_IDENTIFIER.format(clan_identifier=clan_identifier), "CONFIG_CHANNEL_NAME")
-    elif config_channel:
-         logger.info(f"Channel #{CONFIG_CHANNEL_NAME} in '{guild.name}' is not empty or history check failed. Skipping initial messages.")
-    else:
-        logger.warning(f"Could not find or create #{CONFIG_CHANNEL_NAME} channel in '{guild.name}'. Cannot send config messages.")
-
-    # --- Send to Manual Points Channel ---
-    manual_points_channel = channels.get(MANUAL_POINTS_CHANNEL_NAME)
-    if manual_points_channel and await is_channel_empty(manual_points_channel, "MANUAL_POINTS_CHANNEL_NAME"):
-        logger.info(f"Sending initial message to #{MANUAL_POINTS_CHANNEL_NAME} in '{guild.name}'.")
-        await send_safe(manual_points_channel, MSG_MANUAL_POINTS_INTRO.format(INFO_CHANNEL_NAME=INFO_CHANNEL_NAME), "MANUAL_POINTS_CHANNEL_NAME")
-    elif manual_points_channel:
-         logger.info(f"Channel #{MANUAL_POINTS_CHANNEL_NAME} in '{guild.name}' is not empty or history check failed. Skipping initial message.")
-    else:
-        logger.warning(f"Could not find or create #{MANUAL_POINTS_CHANNEL_NAME} channel in '{guild.name}'. Cannot send manual points intro.")
-
-    # --- Send to Commands Channel (Optional Intro) ---
-    commands_channel = channels.get(COMMANDS_CHANNEL_NAME)
-    if commands_channel and await is_channel_empty(commands_channel, "COMMANDS_CHANNEL_NAME"):
-        logger.info(f"Sending initial message to #{COMMANDS_CHANNEL_NAME} in '{guild.name}'.")
-        await send_safe(commands_channel, f"Bot commands for ClanTracker should be used in this channel.\nType `/` to see available commands.", "COMMANDS_CHANNEL_NAME")
-    elif commands_channel:
-         logger.info(f"Channel #{COMMANDS_CHANNEL_NAME} in '{guild.name}' is not empty or history check failed. Skipping initial message.")
-    else:
-        logger.warning(f"Could not find or create #{COMMANDS_CHANNEL_NAME} channel in '{guild.name}'. Cannot send commands intro.")
+        else:
+            logger.info(f"Channel #{actual_channel_name} in '{guild.name}' is not empty or history check failed. Skipping initial message dump.")
 
     logger.info(f"Initial content setup phase finished for guild '{guild.name}'.")
+
+# --- Helper Function to Update Discord Messages ---
+async def _update_identifier_in_guild_channels(
+    guild_id: int,
+    old_identifier: str,
+    new_identifier: str,
+    bot_client: ClanTrackerClient # Pass the client instance
+) -> None:
+    """
+    Attempts to find and update the clan identifier in the ct-info and ct-config
+    channels of a specific guild after it has been changed.
+    """
+    logger.info(f"Attempting to update identifier display in Guild ID {guild_id} from '{old_identifier}' to '{new_identifier}'...")
+
+    try:
+        await bot_client.wait_until_ready() # Ensure client is ready
+        guild = bot_client.get_guild(guild_id)
+
+        if not guild:
+            logger.warning(f"Could not find Guild {guild_id} in cache to update identifier messages.")
+            return # Cannot proceed if guild isn't found
+
+        bot_member = guild.me # Bot's member object in this guild
+
+        # --- Update ct-info Channel ---
+        info_channel = discord.utils.get(guild.text_channels, name=INFO_CHANNEL_NAME)
+        if info_channel:
+            logger.debug(f"Found channel #{INFO_CHANNEL_NAME} in Guild {guild.name} ({guild_id}).")
+            perms = info_channel.permissions_for(bot_member)
+            if not perms.read_message_history:
+                logger.warning(f"Missing 'Read Message History' permission in #{INFO_CHANNEL_NAME} (Guild {guild_id}). Cannot search for message to update.")
+            elif not perms.manage_messages:
+                 logger.warning(f"Missing 'Manage Messages' permission in #{INFO_CHANNEL_NAME} (Guild {guild_id}). Cannot edit message.")
+            else:
+                try:
+                    target_info_line = f"### Your unique Clan Identifier: `{old_identifier}`"
+                    found_info_msg = False
+                    async for message in info_channel.history(limit=20):
+                        if target_info_line in message.content and message.author == bot_client.user:
+                            logger.info(f"Found message containing old identifier '{old_identifier}' in #{INFO_CHANNEL_NAME} (Msg ID: {message.id}).")
+                            new_content = message.content.replace(
+                                target_info_line,
+                                f"### Your unique Clan Identifier: `{new_identifier}`"
+                            )
+                            await message.edit(content=new_content, suppress=True)
+                            logger.info(f"Successfully updated identifier in #{INFO_CHANNEL_NAME} (Guild {guild_id}).")
+                            found_info_msg = True
+                            break
+
+                    if not found_info_msg:
+                         logger.warning(f"Could not find the message containing '{target_info_line}' in the last 20 messages of #{INFO_CHANNEL_NAME} (Guild {guild_id}).")
+
+                except discord.Forbidden:
+                    logger.error(f"Forbidden error while trying to edit message in #{INFO_CHANNEL_NAME} (Guild {guild_id}). Check 'Manage Messages' permission.")
+                except discord.HTTPException as e:
+                    logger.error(f"HTTP error editing message in #{INFO_CHANNEL_NAME} (Guild {guild_id}): {e}", exc_info=True)
+                except Exception as e:
+                    logger.error(f"Unexpected error updating message in #{INFO_CHANNEL_NAME} (Guild {guild_id}): {e}", exc_info=True)
+        else:
+            logger.warning(f"Channel #{INFO_CHANNEL_NAME} not found in Guild {guild.name} ({guild_id}). Cannot update identifier message.")
+
+
+        # --- Update ct-config Channel ---
+        config_channel = discord.utils.get(guild.text_channels, name=CONFIG_CHANNEL_NAME)
+        if config_channel:
+            logger.debug(f"Found channel #{CONFIG_CHANNEL_NAME} in Guild {guild.name} ({guild_id}).")
+            perms = config_channel.permissions_for(bot_member)
+            if not perms.read_message_history:
+                logger.warning(f"Missing 'Read Message History' permission in #{CONFIG_CHANNEL_NAME} (Guild {guild_id}). Cannot search for message.")
+            elif not perms.manage_messages:
+                 logger.warning(f"Missing 'Manage Messages' permission in #{CONFIG_CHANNEL_NAME} (Guild {guild_id}). Cannot edit message.")
+            else:
+                try:
+                    target_config_line = f"clan_identifier = {old_identifier}"
+                    found_config_msg = False
+                    async for message in config_channel.history(limit=5):
+                        cleaned_content = clean_message_content(message.content)
+                        if target_config_line in cleaned_content and message.author == bot_client.user:
+                            logger.info(f"Found message containing old identifier config '{old_identifier}' in #{CONFIG_CHANNEL_NAME} (Msg ID: {message.id}).")
+                            format_kwargs = {"clan_identifier": new_identifier}
+                            try:
+                                new_content = MSG_1_CONFIG_CHANNEL_NAME.format(**format_kwargs)
+                            except KeyError as e:
+                                logger.error(f"Formatting error in MSG_1_CONFIG_CHANNEL_NAME template. Missing key: {e}. Cannot update config message.")
+                                continue
+                            await message.edit(content=new_content, suppress=True)
+                            logger.info(f"Successfully updated identifier in #{CONFIG_CHANNEL_NAME} (Guild {guild_id}).")
+                            found_config_msg = True
+                            break
+                    if not found_config_msg:
+                         logger.warning(f"Could not find the message containing '{target_config_line}' in the last 5 messages of #{CONFIG_CHANNEL_NAME} (Guild {guild_id}).")
+
+                except discord.Forbidden:
+                    logger.error(f"Forbidden error while trying to edit message in #{CONFIG_CHANNEL_NAME} (Guild {guild_id}). Check 'Manage Messages' permission.")
+                except discord.HTTPException as e:
+                    logger.error(f"HTTP error editing message in #{CONFIG_CHANNEL_NAME} (Guild {guild_id}): {e}", exc_info=True)
+                except Exception as e:
+                    logger.error(f"Unexpected error updating message in #{CONFIG_CHANNEL_NAME} (Guild {guild_id}): {e}", exc_info=True)
+        else:
+            logger.warning(f"Channel #{CONFIG_CHANNEL_NAME} not found in Guild {guild.name} ({guild_id}). Cannot update identifier message.")
+
+    except Exception as e:
+        logger.error(f"Unexpected error during identifier update process for Guild {guild_id}: {e}", exc_info=True)
+
+    logger.info(f"Finished identifier display update attempt for Guild ID {guild_id}.")
 
 
 # --- Slash Command Check ---
@@ -999,7 +1052,7 @@ def is_in_database_channel():
             logger.warning(f"User {interaction.user} tried to use /database in the wrong channel (Channel: #{interaction.channel.name if interaction.channel else 'N/A'}).")
             try:
                 await interaction.response.send_message(
-                    f"❌ This command can only be used in the designated database inspection channel.",
+                    f"❌ This command can only be used by the developer in the designated channel.",
                     ephemeral=True
                 )
             except discord.InteractionResponded: pass
@@ -1027,8 +1080,43 @@ def is_in_database_channel():
         return True # All checks passed
     return app_commands.check(predicate)
 
+# Check for Authorized Users
+def is_authorized_user():
+    """Checks if the command invoker is in the AUTHORIZED_USERNAMES set."""
+    async def predicate(interaction: discord.Interaction) -> bool:
+        global AUTHORIZED_USERNAMES # Access the global set populated at startup
+
+        if not AUTHORIZED_USERNAMES:
+            logger.error(f"Authorization check failed: AUTHORIZED_USERS environment variable is not set or empty. Denying access to '/{interaction.command.name if interaction.command else 'unknown'}' for user {interaction.user}.")
+            try:
+                await interaction.response.send_message(
+                    "❌ This command is restricted, but the list of authorized users is not configured in the bot's environment.",
+                    ephemeral=True
+                )
+            except discord.InteractionResponded: pass
+            except Exception as e: logger.error(f"Error sending authorization config error message: {e}", exc_info=True)
+            return False
+
+        # Compare using lowercase for case-insensitivity
+        invoker_username_lower = interaction.user.name.lower()
+
+        if invoker_username_lower in AUTHORIZED_USERNAMES:
+            logger.debug(f"User '{interaction.user.name}' is authorized for command '/{interaction.command.name if interaction.command else 'unknown'}'.")
+            return True
+        else:
+            logger.warning(f"User '{interaction.user.name}' (ID: {interaction.user.id}) attempted to use restricted command '/{interaction.command.name if interaction.command else 'unknown'}' but is not in the authorized list.")
+            try:
+                await interaction.response.send_message(
+                    f"❌ You are not authorized to use this command.",
+                    ephemeral=True
+                )
+            except discord.InteractionResponded: pass
+            except Exception as e: logger.error(f"Error sending authorization restriction message: {e}", exc_info=True)
+            return False
+    return app_commands.check(predicate)
+
 # --- HYD Slash Command ---
-@tree.command(name="hyd", description="Ask how the bot feels today :)")
+@tree.command(name="hyd", description="Ask how the bot feels right now :)")
 @is_in_commands_channel()
 async def hyd_command(interaction: discord.Interaction):
     """Handles the /hyd command."""
@@ -1038,7 +1126,7 @@ async def hyd_command(interaction: discord.Interaction):
         if not os.path.exists(HYD_FILE_PATH):
             logger.warning(f"HYD response file not found at: {HYD_FILE_PATH}. Creating default.")
             with open(HYD_FILE_PATH, 'w', encoding='utf-8') as f:
-                f.write("Feeling operational.\n")
+                f.write("Shut up im thinking.\n")
                 f.write("Just processing bits and bytes.\n")
                 f.write("Ask me later, I'm compiling.\n")
             possible_responses = ["Feeling operational."]
@@ -1062,9 +1150,10 @@ async def hyd_command(interaction: discord.Interaction):
                 await interaction.response.send_message("Sorry, I encountered an error while trying to express my existential dread.", ephemeral=True)
             except Exception: pass
 
-# Database Command (Used for debugging, inspecting the identifiers file, not for normal users)
+# --- Database Inspection Command ---
 @tree.command(name="database", description="Sends the content of the clan identifiers database file.")
 @is_in_database_channel() # Apply the specific channel check
+@is_authorized_user() # Ensure only authorized users can access this command
 async def database_command(interaction: discord.Interaction):
     """Handles the /database command to view the identifier file."""
     logger.info(f"Command '/database' invoked by {interaction.user} in channel #{interaction.channel.name}")
@@ -1091,7 +1180,6 @@ async def database_command(interaction: discord.Interaction):
 
         # Send the content as a file attachment
         # Use io.StringIO to treat the string content like a file
-        import io
         file_data = io.StringIO(content)
         discord_file = discord.File(fp=file_data, filename=IDENTIFIER_FILE_NAME)
 
@@ -1120,6 +1208,227 @@ async def database_command(interaction: discord.Interaction):
             await interaction.followup.send("❌ An unexpected error occurred while retrieving the database file.")
         except Exception as e_resp:
             logger.error(f"Failed to send error message for /database command: {e_resp}", exc_info=True)
+
+# --- Autocomplete for Clan Identifiers ---
+async def clan_identifier_autocomplete(
+    interaction: discord.Interaction,
+    current: str,
+) -> List[Choice[str]]:
+    """Autocompletes clan identifiers for commands."""
+    global server_identifiers
+    choices = []
+    current_lower = current.lower()
+
+    # Create a list of (identifier, name) tuples for easier sorting/filtering
+    identifier_list = [
+        (data.get('identifier', ''), data.get('name', 'Unknown Server'))
+        for data in server_identifiers.values()
+        if isinstance(data, dict) and data.get('identifier')
+    ]
+
+    # Sort primarily by identifier, secondarily by name for consistency
+    identifier_list.sort()
+
+    for identifier, name in identifier_list:
+        if not identifier: # Skip if identifier is somehow empty
+            continue
+        # Match if current input is in identifier OR server name
+        if current_lower in identifier.lower() or current_lower in name.lower():
+            # Display format: IDENTIFIER (Server Name)
+            display_name = f"{identifier} ({name})"
+            # Truncate display name if too long for Discord's limit (100 chars)
+            if len(display_name) > 100:
+                display_name = display_name[:97] + "..."
+            choices.append(Choice(name=display_name, value=identifier))
+        # Stop adding choices if we reach Discord's limit (25)
+        if len(choices) >= 25:
+            break
+    return choices
+
+# --- Remove Clan Entry Command ---
+@tree.command(name="remove_clan_entry", description="Removes a clan entry from the database using its identifier.")
+@is_in_database_channel() # Restrict to the database channel
+@is_authorized_user() # Ensure only authorized users can access this command
+@app_commands.describe(clan_identifier="The unique identifier of the clan entry to remove.")
+@app_commands.autocomplete(clan_identifier=clan_identifier_autocomplete) # Add autocomplete
+async def remove_clan_entry_command(interaction: discord.Interaction, clan_identifier: str):
+    """Handles the /remove_clan_entry command."""
+    logger.info(f"Command '/remove_clan_entry' invoked by {interaction.user} for identifier '{clan_identifier}' in channel #{interaction.channel.name}")
+
+    # Defer ephemerally - only the invoker needs to see the result
+    await interaction.response.defer(ephemeral=True, thinking=True)
+
+    global server_identifiers # We need to modify this global dict
+
+    guild_id_to_delete: Optional[str] = None
+    guild_name_deleted: str = "Unknown Name"
+
+    # Find the guild ID associated with the provided identifier
+    found_info = find_guild_info_by_identifier(clan_identifier)
+
+    if found_info:
+        guild_id_to_delete, guild_name_deleted = found_info
+        logger.info(f"Found Guild ID '{guild_id_to_delete}' (Name: '{guild_name_deleted}') associated with identifier '{clan_identifier}'.")
+    else:
+        logger.warning(f"Clan identifier '{clan_identifier}' not found in the database for removal.")
+        await interaction.followup.send(f"❌ Clan identifier `{clan_identifier}` was not found in the database.", ephemeral=True)
+        return
+
+    # Proceed with deletion
+    try:
+        if guild_id_to_delete in server_identifiers:
+            del server_identifiers[guild_id_to_delete]
+            logger.info(f"Removed entry for Guild ID '{guild_id_to_delete}' (Identifier: '{clan_identifier}') from memory.")
+
+            # Save the updated identifiers to the file
+            save_identifiers() # This function already logs success/failure
+            logger.info(f"Successfully saved database after removing entry for identifier '{clan_identifier}'.")
+
+            await interaction.followup.send(
+                f"✅ Successfully removed the entry for clan identifier `{clan_identifier}` "
+                f"(associated with Guild ID `{guild_id_to_delete}`, Name: `{guild_name_deleted}`).",
+                ephemeral=True
+            )
+        else:
+            # This case should technically not happen if find_guild_info_by_identifier worked, but handle defensively
+            logger.error(f"Inconsistency: Found identifier '{clan_identifier}' but Guild ID '{guild_id_to_delete}' was not in server_identifiers dict during deletion attempt.")
+            await interaction.followup.send(f"❌ An internal inconsistency occurred. Could not find Guild ID `{guild_id_to_delete}` to delete, even though the identifier was initially found. Please check the logs.", ephemeral=True)
+
+    except Exception as e:
+        logger.error(f"Error removing or saving identifier '{clan_identifier}' (Guild ID: {guild_id_to_delete}): {e}", exc_info=True)
+        # Attempt to reload identifiers to revert in-memory changes if save failed? Or just report error. Let's report.
+        # load_identifiers() # Optional: uncomment to try and revert memory state on error
+        await interaction.followup.send(f"❌ An unexpected error occurred while trying to remove the entry for `{clan_identifier}`. Please check the bot logs.", ephemeral=True)
+
+# --- Replace Clan Entry Command ---
+@tree.command(name="replace_clan_entry", description="Replaces an existing clan identifier with a new one.")
+@is_in_database_channel() # Restrict to the database channel
+@is_authorized_user() # Ensure only authorized users can access this command
+@app_commands.describe(
+    old_clan_identifier="The current identifier of the clan entry to modify.",
+    new_clan_identifier=f"The new identifier (1-{IDENTIFIER_LENGTH} chars, A-Z, 0-9, must be unique)."
+)
+@app_commands.autocomplete(old_clan_identifier=clan_identifier_autocomplete) # Autocomplete for the old identifier
+async def replace_clan_entry_command(
+    interaction: discord.Interaction,
+    old_clan_identifier: str,
+    new_clan_identifier: str
+):
+    """Handles the /replace_clan_entry command."""
+    logger.info(f"Command '/replace_clan_entry' invoked by {interaction.user} to replace '{old_clan_identifier}' with '{new_clan_identifier}' in channel #{interaction.channel.name}")
+
+    # Defer ephemerally
+    await interaction.response.defer(ephemeral=True, thinking=True)
+
+    global server_identifiers # We need to modify this global dict
+    global client # Need access to the client instance
+
+    # --- 1. Find the entry to modify ---
+    guild_id_to_modify: Optional[str] = None
+    guild_name_modified: str = "Unknown Name"
+    found_info = find_guild_info_by_identifier(old_clan_identifier)
+
+    if found_info:
+        guild_id_to_modify, guild_name_modified = found_info
+        logger.info(f"Found Guild ID '{guild_id_to_modify}' (Name: '{guild_name_modified}') associated with identifier '{old_clan_identifier}' for replacement.")
+    else:
+        logger.warning(f"Old clan identifier '{old_clan_identifier}' not found in the database for replacement.")
+        await interaction.followup.send(f"❌ The original clan identifier `{old_clan_identifier}` was not found in the database.", ephemeral=True)
+        return
+
+    # --- 2. Validate the NEW identifier ---
+    new_id_clean = new_clan_identifier.strip().upper() # Clean and enforce uppercase
+
+    # Check length
+    if not (1 <= len(new_id_clean) <= IDENTIFIER_LENGTH):
+        logger.warning(f"Validation failed for new identifier '{new_id_clean}': Invalid length ({len(new_id_clean)}).")
+        await interaction.followup.send(
+            f"❌ Validation Failed: The new identifier `{new_id_clean}` is invalid. "
+            f"It must be between 1 and {IDENTIFIER_LENGTH} characters long.",
+            ephemeral=True
+        )
+        return
+
+    # Check characters (A-Z, 0-9)
+    if not re.match(r'^[A-Z0-9]+$', new_id_clean):
+        logger.warning(f"Validation failed for new identifier '{new_id_clean}': Invalid characters.")
+        await interaction.followup.send(
+            f"❌ Validation Failed: The new identifier `{new_id_clean}` contains invalid characters. "
+            f"Only uppercase letters (A-Z) and digits (0-9) are allowed.",
+            ephemeral=True
+        )
+        return
+
+    # Check if the user is trying to replace it with the same identifier
+    if old_clan_identifier == new_id_clean:
+        logger.info(f"User attempted to replace '{old_clan_identifier}' with itself. No changes needed.")
+        await interaction.followup.send(
+            f"ℹ️ The new identifier (`{new_id_clean}`) is the same as the old one (`{old_clan_identifier}`). No changes were made.",
+            ephemeral=True
+        )
+        return
+
+    # Check uniqueness (ensure NEW id isn't used by ANOTHER guild)
+    conflicting_guild_id: Optional[str] = None
+    conflicting_guild_name: str = "Unknown"
+    for gid, data in server_identifiers.items():
+        # Check if another guild (gid != guild_id_to_modify) already uses the new identifier
+        if gid != guild_id_to_modify and isinstance(data, dict) and data.get('identifier') == new_id_clean:
+            conflicting_guild_id = gid
+            conflicting_guild_name = data.get('name', 'Unknown Name')
+            break # Found a conflict
+
+    if conflicting_guild_id:
+        logger.warning(f"Validation failed for new identifier '{new_id_clean}': Already in use by Guild ID '{conflicting_guild_id}' (Name: '{conflicting_guild_name}').")
+        await interaction.followup.send(
+            f"❌ Validation Failed: The new identifier `{new_id_clean}` is already in use by another server "
+            f"(Name: `{conflicting_guild_name}`, Guild ID: `{conflicting_guild_id}`). "
+            f"Please choose a unique identifier.",
+            ephemeral=True
+        )
+        return
+
+    # --- 3. Perform the replacement ---
+    try:
+        # Ensure the entry still exists (defensive check)
+        if guild_id_to_modify in server_identifiers and isinstance(server_identifiers[guild_id_to_modify], dict):
+            server_identifiers[guild_id_to_modify]['identifier'] = new_id_clean
+            logger.info(f"Updated identifier in memory for Guild ID '{guild_id_to_modify}' from '{old_clan_identifier}' to '{new_id_clean}'.")
+
+            # Save the updated identifiers to the file
+            save_identifiers() # This function already logs success/failure
+            logger.info(f"Successfully saved database after replacing identifier for Guild ID '{guild_id_to_modify}'.")
+
+            # Attempt to update the messages in the target guild's channels
+            # We run this *after* saving and *before* confirming to the user
+            # Convert guild_id_to_modify to int for the helper function
+            try:
+                guild_id_int = int(guild_id_to_modify)
+                # Run the update task - await it directly so we know if it had immediate issues
+                # (though it logs its own progress/errors)
+                await _update_identifier_in_guild_channels(guild_id_int, old_clan_identifier, new_id_clean, client)
+            except ValueError:
+                 logger.error(f"Could not convert Guild ID '{guild_id_to_modify}' to integer. Skipping Discord message update.")
+            except Exception as update_err:
+                 logger.error(f"An error occurred initiating the Discord message update for Guild {guild_id_to_modify}: {update_err}", exc_info=True)
+
+
+            await interaction.followup.send(
+                f"✅ Successfully replaced the identifier for **{guild_name_modified}** (Guild ID: `{guild_id_to_modify}`).\n"
+                f"Old Identifier: `{old_clan_identifier}`\n"
+                f"New Identifier: `{new_id_clean}`\n"
+                f"_(Attempted to update display messages in the server.)_", # Optional: Add note
+                ephemeral=True
+            )
+        else:
+            # This case should technically not happen if find_guild_info_by_identifier worked initially, but handle defensively
+            logger.error(f"Inconsistency: Guild ID '{guild_id_to_modify}' (for old id '{old_clan_identifier}') was not found in server_identifiers dict during replacement attempt.")
+            await interaction.followup.send(f"❌ An internal inconsistency occurred. Could not find the entry for Guild ID `{guild_id_to_modify}` to update. Please check the logs.", ephemeral=True)
+
+    except Exception as e:
+        logger.error(f"Error replacing or saving identifier '{old_clan_identifier}' -> '{new_id_clean}' (Guild ID: {guild_id_to_modify}): {e}", exc_info=True)
+        # Don't attempt reload here, just report error
+        await interaction.followup.send(f"❌ An unexpected error occurred while trying to replace the identifier `{old_clan_identifier}` with `{new_id_clean}`. Please check the bot logs.", ephemeral=True)
 
 # --- Command Check Error Handler ---
 @tree.error
@@ -1169,12 +1478,19 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
 # --- Bot Start Function ---
 def prepare_bot() -> bool:
     """Checks essential configuration and loads initial data."""
+    global AUTHORIZED_USERNAMES
+
     logger.info("Preparing bot...")
+    # Check for required environment variables
     if not TOKEN:
         logger.critical("CRITICAL ERROR: DISCORD_BOT_TOKEN environment variable not set. Bot cannot start.")
         return False
-    if not GITHUB_README_MD_LINK or "YOUR_USERNAME/YOUR_REPO" in GITHUB_README_MD_LINK:
-         logger.warning("Configuration Warning: GITHUB_README_MD_LINK is not set or uses the default placeholder. Please set this environment variable.")
+    if not GITHUB_APP_README_MD_LINK:
+         logger.warning("Configuration Warning: GITHUB_APP_README_MD_LINK environment variable is not set. Please ensure it is configured.")
+    if not GITHUB_BOT_README_MD_LINK:
+         logger.warning("Configuration Warning: GITHUB_BOT_README_MD_LINK environment variable is not set. Please ensure it is configured.")
+    if not OFFICIAL_DISCORD_LINK or "y4tmVW9p" in OFFICIAL_DISCORD_LINK:
+         logger.warning("Configuration Warning: OFFICIAL_DISCORD_LINK is not set or uses the default invite. Please set this environment variable.")
 
     load_identifiers()
 
@@ -1184,6 +1500,20 @@ def prepare_bot() -> bool:
     # --- Log Database Inspection Status ---
     if INSPECT_DB_GUILD_ID and INSPECT_DB_CHANNEL_ID:
         logger.info(f"Database inspection command (/database) enabled for Guild ID {INSPECT_DB_GUILD_ID}, Channel ID {INSPECT_DB_CHANNEL_ID}.")
+
+        # --- Process Authorized Users ---
+        if AUTHORIZED_USERS_STR:
+            # Split by comma, strip whitespace, convert to lowercase, filter out empty strings
+            raw_names = [name.strip().lower() for name in AUTHORIZED_USERS_STR.split(',')]
+            AUTHORIZED_USERNAMES = {name for name in raw_names if name} # Use set comprehension to store unique, non-empty names
+            if AUTHORIZED_USERNAMES:
+                 logger.info(f"Database commands restricted to users: {', '.join(sorted(list(AUTHORIZED_USERNAMES)))}")
+            else:
+                 logger.error("AUTHORIZED_USERS environment variable was set, but contained no valid usernames after parsing. Database commands will be inaccessible.")
+        else:
+            logger.error("AUTHORIZED_USERS environment variable is not set. Database commands will be inaccessible.")
+            AUTHORIZED_USERNAMES = set()
+
     else:
         logger.warning("Database inspection command (/database) is disabled. Set INSPECT_DATABASE_GUILD_ID and INSPECT_DATABASE_CHANNEL_ID environment variables to enable.")
 
