@@ -80,7 +80,7 @@ HYD_FILE_PATH: str = os.path.join(RESPONSES_DIR, HYD_FILE_NAME)
 # External Links
 GITHUB_APP_README_MD_LINK: str = os.getenv('GITHUB_APP_README_MD_LINK', "")
 GITHUB_BOT_README_MD_LINK: str = os.getenv('GITHUB_BOT_README_MD_LINK', "")
-OFFICIAL_DISCORD_LINK: str = os.getenv('OFFICIAL_DISCORD_LINK', "https://discord.gg/y4tmVW9p")
+OFFICIAL_DISCORD_LINK: str = os.getenv('OFFICIAL_DISCORD_LINK', "")
 
 # Bot Discord Permissions
 # -> Manage Channels, View Channels, Send Messages, Read Message History, Manage Messages
@@ -1510,8 +1510,8 @@ def prepare_bot() -> bool:
          logger.warning("Configuration Warning: GITHUB_APP_README_MD_LINK environment variable is not set. Please ensure it is configured.")
     if not GITHUB_BOT_README_MD_LINK:
          logger.warning("Configuration Warning: GITHUB_BOT_README_MD_LINK environment variable is not set. Please ensure it is configured.")
-    if not OFFICIAL_DISCORD_LINK or "y4tmVW9p" in OFFICIAL_DISCORD_LINK:
-         logger.warning("Configuration Warning: OFFICIAL_DISCORD_LINK is not set or uses the default invite. Please set this environment variable.")
+    if not OFFICIAL_DISCORD_LINK:
+         logger.warning("Configuration Warning: OFFICIAL_DISCORD_LINK environment variable is not set. Please set this environment variable.")
 
     load_identifiers()
 
