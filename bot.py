@@ -63,14 +63,15 @@ INSPECT_DB_CHANNEL_ID_STR: Optional[str] = os.getenv('INSPECT_DATABASE_CHANNEL_I
 INSPECT_DB_GUILD_ID: Optional[int] = int(INSPECT_DB_GUILD_ID_STR) if INSPECT_DB_GUILD_ID_STR and INSPECT_DB_GUILD_ID_STR.isdigit() else None
 INSPECT_DB_CHANNEL_ID: Optional[int] = int(INSPECT_DB_CHANNEL_ID_STR) if INSPECT_DB_CHANNEL_ID_STR and INSPECT_DB_CHANNEL_ID_STR.isdigit() else None
 
-AUTHORIZED_USERS_STR: Optional[str] = os.getenv('AUTHORIZED_USERS')
-AUTHORIZED_USERNAMES: Set[str] = set() # Initialize as empty set
+# --- Authorization Configuration ---
+AUTHORIZED_USER_IDS_STR: Optional[str] = os.getenv('AUTHORIZED_USER_IDS')
+AUTHORIZED_USER_IDS_SET: Set[str] = set()
 
 # Data Storage
 DATA_DIR: str = os.getenv('DATA_DIR', 'data')
 IDENTIFIER_FILE_NAME: str = "clan_identifiers.json"
 IDENTIFIER_FILE: str = os.path.join(DATA_DIR, IDENTIFIER_FILE_NAME)
-IDENTIFIER_LENGTH: int = 8
+IDENTIFIER_LENGTH: int = 20
 
 # Responses
 RESPONSES_DIR: str = "commands"
@@ -422,19 +423,6 @@ class ClanTrackerClient(discord.Client):
             await update_status_from_channel(self)
             return
 
-        # --- !ping - bot response speed testing ---
-        if message.content.strip().lower() == "!ping":
-            if message.channel.name == COMMANDS_CHANNEL_NAME:
-                try:
-                    await message.channel.send("Pong!")
-                    logger.debug(f"Responded to !ping in #{message.channel.name} (Guild: {message.guild.name})")
-                except discord.Forbidden:
-                    logger.warning(f"Cannot send Pong! response in #{message.channel.name} (Guild: {message.guild.name}) - Missing Send Messages permission.")
-                except Exception as e:
-                    logger.error(f"Error responding to !ping in {message.channel.name}: {e}", exc_info=True)
-            else:
-                 logger.debug(f"Ignored !ping command outside #{COMMANDS_CHANNEL_NAME} in guild {message.guild.name}")
-
     async def on_message_delete(self, message: discord.Message) -> None:
         """Handles message deletion."""
         if message.guild is None:
@@ -444,7 +432,6 @@ class ClanTrackerClient(discord.Client):
         if STATUS_GUILD_ID and STATUS_CHANNEL_ID and \
            message.guild.id == STATUS_GUILD_ID and message.channel.id == STATUS_CHANNEL_ID:
             logger.info(f"Message deleted in status channel ({message.channel.id}). Triggering status update.")
-            await asyncio.sleep(1.5)
             await update_status_from_channel(self)
 
     # --- AIOHTTP Web Server Methods ---
@@ -892,8 +879,9 @@ async def _update_identifier_in_guild_channels(
     bot_client: ClanTrackerClient # Pass the client instance
 ) -> None:
     """
-    Attempts to find and update the clan identifier in the ct-info and ct-config
-    channels of a specific guild after it has been changed.
+    Attempts to find the FIRST message sent by the bot in ct-info and ct-config
+    channels and update the clan identifier if it matches the old one.
+    Searches from the oldest message first.
     """
     logger.info(f"Attempting to update identifier display in Guild ID {guild_id} from '{old_identifier}' to '{new_identifier}'...")
 
@@ -906,11 +894,16 @@ async def _update_identifier_in_guild_channels(
             return # Cannot proceed if guild isn't found
 
         bot_member = guild.me # Bot's member object in this guild
+        bot_user = bot_client.user # The bot's user object
+
+        if not bot_user:
+             logger.error(f"Could not get bot user object. Cannot reliably identify bot messages for update in Guild {guild_id}.")
+             return
 
         # --- Update ct-info Channel ---
         info_channel = discord.utils.get(guild.text_channels, name=INFO_CHANNEL_NAME)
         if info_channel:
-            logger.debug(f"Found channel #{INFO_CHANNEL_NAME} in Guild {guild.name} ({guild_id}).")
+            logger.debug(f"Searching for first bot message in #{INFO_CHANNEL_NAME} (Guild {guild.name}, ID: {guild_id}).")
             perms = info_channel.permissions_for(bot_member)
             if not perms.read_message_history:
                 logger.warning(f"Missing 'Read Message History' permission in #{INFO_CHANNEL_NAME} (Guild {guild_id}). Cannot search for message to update.")
@@ -920,25 +913,30 @@ async def _update_identifier_in_guild_channels(
                 try:
                     target_info_line = f"### Your unique Clan Identifier: `{old_identifier}`"
                     found_info_msg = False
-                    async for message in info_channel.history(limit=20):
-                        if target_info_line in message.content and message.author == bot_client.user:
-                            logger.info(f"Found message containing old identifier '{old_identifier}' in #{INFO_CHANNEL_NAME} (Msg ID: {message.id}).")
-                            new_content = message.content.replace(
-                                target_info_line,
-                                f"### Your unique Clan Identifier: `{new_identifier}`"
-                            )
-                            await message.edit(content=new_content, suppress=True)
-                            logger.info(f"Successfully updated identifier in #{INFO_CHANNEL_NAME} (Guild {guild_id}).")
-                            found_info_msg = True
+                    # Search from oldest, limit reasonably high to ensure finding the first bot message
+                    async for message in info_channel.history(limit=100, oldest_first=True):
+                        if message.author == bot_user: # Check if it's the bot's message
+                            if target_info_line in message.content:
+                                logger.info(f"Found first bot message containing old identifier '{old_identifier}' in #{INFO_CHANNEL_NAME} (Msg ID: {message.id}).")
+                                new_content = message.content.replace(
+                                    target_info_line,
+                                    f"### Your unique Clan Identifier: `{new_identifier}`"
+                                )
+                                await message.edit(content=new_content, suppress=True)
+                                logger.info(f"Successfully updated identifier in #{INFO_CHANNEL_NAME} (Guild {guild_id}).")
+                                found_info_msg = True
+                            else:
+                                 logger.info(f"Found first bot message in #{INFO_CHANNEL_NAME} (Msg ID: {message.id}), but it didn't contain the target line '{target_info_line}'. Stopping search for this channel.")
+                            # Break after finding the *first* message from the bot, regardless of content match
                             break
 
                     if not found_info_msg:
-                         logger.warning(f"Could not find the message containing '{target_info_line}' in the last 20 messages of #{INFO_CHANNEL_NAME} (Guild {guild_id}).")
+                         logger.warning(f"Could not find the first bot message containing '{target_info_line}' in #{INFO_CHANNEL_NAME} (Guild {guild_id}) within the search limit, or the first bot message didn't contain it.")
 
                 except discord.Forbidden:
-                    logger.error(f"Forbidden error while trying to edit message in #{INFO_CHANNEL_NAME} (Guild {guild_id}). Check 'Manage Messages' permission.")
+                    logger.error(f"Forbidden error while trying to read history or edit message in #{INFO_CHANNEL_NAME} (Guild {guild_id}). Check permissions.")
                 except discord.HTTPException as e:
-                    logger.error(f"HTTP error editing message in #{INFO_CHANNEL_NAME} (Guild {guild_id}): {e}", exc_info=True)
+                    logger.error(f"HTTP error processing #{INFO_CHANNEL_NAME} (Guild {guild_id}): {e}", exc_info=True)
                 except Exception as e:
                     logger.error(f"Unexpected error updating message in #{INFO_CHANNEL_NAME} (Guild {guild_id}): {e}", exc_info=True)
         else:
@@ -948,7 +946,7 @@ async def _update_identifier_in_guild_channels(
         # --- Update ct-config Channel ---
         config_channel = discord.utils.get(guild.text_channels, name=CONFIG_CHANNEL_NAME)
         if config_channel:
-            logger.debug(f"Found channel #{CONFIG_CHANNEL_NAME} in Guild {guild.name} ({guild_id}).")
+            logger.debug(f"Searching for first bot message in #{CONFIG_CHANNEL_NAME} (Guild {guild.name}, ID: {guild_id}).")
             perms = config_channel.permissions_for(bot_member)
             if not perms.read_message_history:
                 logger.warning(f"Missing 'Read Message History' permission in #{CONFIG_CHANNEL_NAME} (Guild {guild_id}). Cannot search for message.")
@@ -958,27 +956,34 @@ async def _update_identifier_in_guild_channels(
                 try:
                     target_config_line = f"clan_identifier = {old_identifier}"
                     found_config_msg = False
-                    async for message in config_channel.history(limit=5):
-                        cleaned_content = clean_message_content(message.content)
-                        if target_config_line in cleaned_content and message.author == bot_client.user:
-                            logger.info(f"Found message containing old identifier config '{old_identifier}' in #{CONFIG_CHANNEL_NAME} (Msg ID: {message.id}).")
-                            format_kwargs = {"clan_identifier": new_identifier}
-                            try:
-                                new_content = MSG_1_CONFIG_CHANNEL_NAME.format(**format_kwargs)
-                            except KeyError as e:
-                                logger.error(f"Formatting error in MSG_1_CONFIG_CHANNEL_NAME template. Missing key: {e}. Cannot update config message.")
-                                continue
-                            await message.edit(content=new_content, suppress=True)
-                            logger.info(f"Successfully updated identifier in #{CONFIG_CHANNEL_NAME} (Guild {guild_id}).")
-                            found_config_msg = True
+                    # Search from oldest
+                    async for message in config_channel.history(limit=50, oldest_first=True): # Limit 50 should be plenty
+                        if message.author == bot_user:
+                            cleaned_content = clean_message_content(message.content)
+                            if target_config_line in cleaned_content:
+                                logger.info(f"Found first bot message containing old identifier config '{old_identifier}' in #{CONFIG_CHANNEL_NAME} (Msg ID: {message.id}).")
+                                format_kwargs = {"clan_identifier": new_identifier}
+                                try:
+                                    new_content = MSG_1_CONFIG_CHANNEL_NAME.format(**format_kwargs)
+                                except KeyError as e:
+                                    logger.error(f"Formatting error in MSG_1_CONFIG_CHANNEL_NAME template. Missing key: {e}. Cannot update config message.")
+                                    # Break here as we can't format the replacement
+                                    break
+                                await message.edit(content=new_content, suppress=True)
+                                logger.info(f"Successfully updated identifier in #{CONFIG_CHANNEL_NAME} (Guild {guild_id}).")
+                                found_config_msg = True
+                            else:
+                                logger.info(f"Found first bot message in #{CONFIG_CHANNEL_NAME} (Msg ID: {message.id}), but it didn't contain the target line '{target_config_line}'. Stopping search for this channel.")
+                            # Break after finding the *first* message from the bot
                             break
+
                     if not found_config_msg:
-                         logger.warning(f"Could not find the message containing '{target_config_line}' in the last 5 messages of #{CONFIG_CHANNEL_NAME} (Guild {guild_id}).")
+                         logger.warning(f"Could not find the first bot message containing '{target_config_line}' in #{CONFIG_CHANNEL_NAME} (Guild {guild_id}) within the search limit, or the first bot message didn't contain it.")
 
                 except discord.Forbidden:
-                    logger.error(f"Forbidden error while trying to edit message in #{CONFIG_CHANNEL_NAME} (Guild {guild_id}). Check 'Manage Messages' permission.")
+                    logger.error(f"Forbidden error while trying read history or edit message in #{CONFIG_CHANNEL_NAME} (Guild {guild_id}). Check permissions.")
                 except discord.HTTPException as e:
-                    logger.error(f"HTTP error editing message in #{CONFIG_CHANNEL_NAME} (Guild {guild_id}): {e}", exc_info=True)
+                    logger.error(f"HTTP error processing #{CONFIG_CHANNEL_NAME} (Guild {guild_id}): {e}", exc_info=True)
                 except Exception as e:
                     logger.error(f"Unexpected error updating message in #{CONFIG_CHANNEL_NAME} (Guild {guild_id}): {e}", exc_info=True)
         else:
@@ -1082,29 +1087,29 @@ def is_in_database_channel():
 
 # Check for Authorized Users
 def is_authorized_user():
-    """Checks if the command invoker is in the AUTHORIZED_USERNAMES set."""
+    """Checks if the command invoker's User ID is in the AUTHORIZED_USER_IDS_SET."""
     async def predicate(interaction: discord.Interaction) -> bool:
-        global AUTHORIZED_USERNAMES # Access the global set populated at startup
+        global AUTHORIZED_USER_IDS_SET # Access the global set populated at startup
 
-        if not AUTHORIZED_USERNAMES:
-            logger.error(f"Authorization check failed: AUTHORIZED_USERS environment variable is not set or empty. Denying access to '/{interaction.command.name if interaction.command else 'unknown'}' for user {interaction.user}.")
+        if not AUTHORIZED_USER_IDS_SET:
+            logger.error(f"Authorization check failed: AUTHORIZED_USER_IDS environment variable is not set or empty. Denying access to '/{interaction.command.name if interaction.command else 'unknown'}' for user {interaction.user} (ID: {interaction.user.id}).")
             try:
                 await interaction.response.send_message(
-                    "❌ This command is restricted, but the list of authorized users is not configured in the bot's environment.",
+                    "❌ This command is restricted, but the list of authorized user IDs is not configured in the bot's environment.",
                     ephemeral=True
                 )
             except discord.InteractionResponded: pass
             except Exception as e: logger.error(f"Error sending authorization config error message: {e}", exc_info=True)
             return False
 
-        # Compare using lowercase for case-insensitivity
-        invoker_username_lower = interaction.user.name.lower()
+        # Compare the user's ID (converted to string) against the set of authorized ID strings
+        invoker_id_str = str(interaction.user.id)
 
-        if invoker_username_lower in AUTHORIZED_USERNAMES:
-            logger.debug(f"User '{interaction.user.name}' is authorized for command '/{interaction.command.name if interaction.command else 'unknown'}'.")
+        if invoker_id_str in AUTHORIZED_USER_IDS_SET:
+            logger.debug(f"User '{interaction.user.name}' (ID: {invoker_id_str}) is authorized for command '/{interaction.command.name if interaction.command else 'unknown'}'.")
             return True
         else:
-            logger.warning(f"User '{interaction.user.name}' (ID: {interaction.user.id}) attempted to use restricted command '/{interaction.command.name if interaction.command else 'unknown'}' but is not in the authorized list.")
+            logger.warning(f"User '{interaction.user.name}' (ID: {invoker_id_str}) attempted to use restricted command '/{interaction.command.name if interaction.command else 'unknown'}' but is not in the authorized ID list.")
             try:
                 await interaction.response.send_message(
                     f"❌ You are not authorized to use this command.",
@@ -1149,6 +1154,25 @@ async def hyd_command(interaction: discord.Interaction):
             try:
                 await interaction.response.send_message("Sorry, I encountered an error while trying to express my existential dread.", ephemeral=True)
             except Exception: pass
+
+# --- Ping Slash Command ---
+@tree.command(name="ping", description="Checks the bot's responsiveness.")
+@is_in_commands_channel() # Apply the channel restriction check
+async def ping_command(interaction: discord.Interaction):
+    """Handles the /ping command."""
+    try:
+        # Respond directly via the interaction
+        await interaction.response.send_message("Pong!")
+        logger.info(f"Command '/ping' executed successfully by {interaction.user} in #{interaction.channel.name}")
+
+    except Exception as e:
+        # Log any unexpected error during the response sending, though unlikely after checks
+        logger.error(f"Error sending response for /ping command: {e}", exc_info=True)
+        # The global error handler will likely catch this, but we can try a fallback
+        if not interaction.response.is_done():
+            try:
+                await interaction.response.send_message("Sorry, I couldn't send the Pong! response.", ephemeral=True)
+            except Exception: pass # Avoid further errors if fallback fails
 
 # --- Database Inspection Command ---
 @tree.command(name="database", description="Sends the content of the clan identifiers database file.")
@@ -1501,18 +1525,31 @@ def prepare_bot() -> bool:
     if INSPECT_DB_GUILD_ID and INSPECT_DB_CHANNEL_ID:
         logger.info(f"Database inspection command (/database) enabled for Guild ID {INSPECT_DB_GUILD_ID}, Channel ID {INSPECT_DB_CHANNEL_ID}.")
 
-        # --- Process Authorized Users ---
-        if AUTHORIZED_USERS_STR:
-            # Split by comma, strip whitespace, convert to lowercase, filter out empty strings
-            raw_names = [name.strip().lower() for name in AUTHORIZED_USERS_STR.split(',')]
-            AUTHORIZED_USERNAMES = {name for name in raw_names if name} # Use set comprehension to store unique, non-empty names
-            if AUTHORIZED_USERNAMES:
-                 logger.info(f"Database commands restricted to users: {', '.join(sorted(list(AUTHORIZED_USERNAMES)))}")
+        # --- Process Authorized User IDs ---
+        if AUTHORIZED_USER_IDS_STR:
+            raw_ids = [uid.strip() for uid in AUTHORIZED_USER_IDS_STR.split(',')]
+            valid_ids = set()
+            invalid_entries = []
+            for uid in raw_ids:
+                if uid.isdigit(): # Check if the string contains only digits
+                    valid_ids.add(uid)
+                elif uid: # Log non-empty but invalid entries
+                    invalid_entries.append(uid)
+
+            AUTHORIZED_USER_IDS_SET = valid_ids # Store the validated IDs
+
+            if AUTHORIZED_USER_IDS_SET:
+                 logger.info(f"Database commands restricted to User IDs: {', '.join(sorted(list(AUTHORIZED_USER_IDS_SET)))}")
+                 if invalid_entries:
+                      logger.warning(f"Invalid entries found in AUTHORIZED_USER_IDS and ignored: {', '.join(invalid_entries)}")
             else:
-                 logger.error("AUTHORIZED_USERS environment variable was set, but contained no valid usernames after parsing. Database commands will be inaccessible.")
+                 logger.error("AUTHORIZED_USER_IDS environment variable was set, but contained no valid User IDs after parsing. Database commands will be inaccessible.")
+                 if invalid_entries:
+                      logger.error(f"Invalid entries found: {', '.join(invalid_entries)}")
+
         else:
-            logger.error("AUTHORIZED_USERS environment variable is not set. Database commands will be inaccessible.")
-            AUTHORIZED_USERNAMES = set()
+            logger.error("AUTHORIZED_USER_IDS environment variable is not set. Database commands will be inaccessible.")
+            AUTHORIZED_USER_IDS_SET = set() # Ensure it's an empty set if not configured
 
     else:
         logger.warning("Database inspection command (/database) is disabled. Set INSPECT_DATABASE_GUILD_ID and INSPECT_DATABASE_CHANNEL_ID environment variables to enable.")
