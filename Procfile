@@ -1,1 +1,1 @@
-web: python bot.py
+web: echo "Service intentionally stopped via Procfile" && exit 0
