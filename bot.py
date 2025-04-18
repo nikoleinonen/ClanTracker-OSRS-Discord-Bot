@@ -8,15 +8,15 @@ import string
 import asyncio
 import logging
 import traceback
-import re # Added for parsing helpers
+import re
 from typing import Dict, Optional, Set, Tuple, List, Any
 import random
-from collections import OrderedDict # Ensure OrderedDict is imported
-from aiohttp import web # For the web server API
+from collections import OrderedDict
+from aiohttp import web
 
 # --- Logging Setup (Stream Only for Production) ---
 log_formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(name)s: %(message)s')
-log_level = logging.INFO # Keep INFO level for production, or change as needed
+log_level = logging.INFO
 
 # Configure root logger
 logger = logging.getLogger()
@@ -30,14 +30,13 @@ for handler in logger.handlers[:]:
 console_handler = logging.StreamHandler()
 console_handler.setFormatter(log_formatter)
 logger.addHandler(console_handler)
-# --- End Logging Setup ---
 
 # --- Configuration ---
-load_dotenv() # Load .env file for local development, Railway uses its own env vars
+load_dotenv() # (Local Development Only)
 
 # Bot Settings
 TOKEN: Optional[str] = os.getenv('DISCORD_BOT_TOKEN')
-CATEGORY_NAME: str = os.getenv('CLANTRACKER_CATEGORY_NAME', "ClanTracker-OSRS") # Use env var or default
+CATEGORY_NAME: str = os.getenv('CLANTRACKER_CATEGORY_NAME', "ClanTracker-OSRS")
 INFO_CHANNEL_NAME: str = os.getenv('CLANTRACKER_INFO_CHANNEL', "ct-info")
 CONFIG_CHANNEL_NAME: str = os.getenv('CLANTRACKER_CONFIG_CHANNEL', "ct-config")
 MANUAL_POINTS_CHANNEL_NAME: str = os.getenv('CLANTRACKER_MANUAL_POINTS_CHANNEL', "ct-manual-points")
@@ -54,7 +53,13 @@ STATUS_GUILD_ID_STR: Optional[str] = os.getenv('STATUS_GUILD_ID')
 STATUS_CHANNEL_ID_STR: Optional[str] = os.getenv('STATUS_CHANNEL_ID')
 STATUS_GUILD_ID: Optional[int] = int(STATUS_GUILD_ID_STR) if STATUS_GUILD_ID_STR and STATUS_GUILD_ID_STR.isdigit() else None
 STATUS_CHANNEL_ID: Optional[int] = int(STATUS_CHANNEL_ID_STR) if STATUS_CHANNEL_ID_STR and STATUS_CHANNEL_ID_STR.isdigit() else None
-DEFAULT_STATUS_MESSAGE: str = os.getenv('DEFAULT_BOT_STATUS', "Tracking OSRS Clans") # Default status
+DEFAULT_STATUS_MESSAGE: str = os.getenv('DEFAULT_BOT_STATUS', ":wine_glass:")
+
+# --- Database Inspection Configuration ---
+INSPECT_DB_GUILD_ID_STR: Optional[str] = os.getenv('INSPECT_DATABASE_GUILD_ID')
+INSPECT_DB_CHANNEL_ID_STR: Optional[str] = os.getenv('INSPECT_DATABASE_CHANNEL_ID')
+INSPECT_DB_GUILD_ID: Optional[int] = int(INSPECT_DB_GUILD_ID_STR) if INSPECT_DB_GUILD_ID_STR and INSPECT_DB_GUILD_ID_STR.isdigit() else None
+INSPECT_DB_CHANNEL_ID: Optional[int] = int(INSPECT_DB_CHANNEL_ID_STR) if INSPECT_DB_CHANNEL_ID_STR and INSPECT_DB_CHANNEL_ID_STR.isdigit() else None
 
 # Data Storage
 DATA_DIR: str = "/data"
@@ -71,6 +76,7 @@ HYD_FILE_PATH: str = os.path.join(RESPONSES_DIR, HYD_FILE_NAME)
 GITHUB_README_MD_LINK: str = os.getenv('GITHUB_README_MD_LINK', "https://github.com/YOUR_USERNAME/YOUR_REPO/blob/main/info.md") # <-- TODO: Set this in Railway env vars!
 
 # Bot Discord Permissions
+# -> Manage Channels, View Channels, Send Messages, Read Message History
 BOT_PERMISSIONS: int = 68624
 
 # --- Global Storage for Identifiers ---
@@ -78,7 +84,6 @@ server_identifiers: Dict[str, Dict[str, str]] = {}
 
 # --- Initial Message Content Constants ---
 # Keep all MSG_... constants as they are, but ensure they use the channel name variables
-# Example adjustment (apply similarly to others):
 MSG_INFO_WELCOME = (
     "**Thank you for using ClanTracker OSRS!**\n\n"
     "Your unique Clan Identifier: `{clan_identifier}`\n"
@@ -242,7 +247,6 @@ MSG_MANUAL_POINTS_INTRO = (
     "```\n"
     f"*(See `#{INFO_CHANNEL_NAME}` for detailed instructions and keys)*"
 )
-# --- End Initial Message Content Constants ---
 
 
 # --- Helper Functions (Bot & API) ---
@@ -293,7 +297,7 @@ def generate_unique_identifier(existing_identifiers_set: Set[str]) -> str:
         if identifier not in existing_identifiers_set:
             return identifier
 
-# --- API Helper Functions (Moved from get_clan_information.py) ---
+# --- API Helper Functions ---
 
 def find_guild_id_by_identifier(clan_identifier: str) -> Optional[str]:
     """Finds the Guild ID string associated with a clan identifier."""
@@ -470,7 +474,7 @@ class ClanTrackerClient(discord.Client):
             await update_status_from_channel(self)
             return
 
-        # --- Legacy ping command (Example) ---
+        # --- !ping - bot response speed testing ---
         if message.content.strip().lower() == "!ping":
             if message.channel.name == COMMANDS_CHANNEL_NAME:
                 try:
@@ -887,7 +891,7 @@ async def _send_initial_messages(
                 logger.error(f"Failed to send message {i+1} to #{INFO_CHANNEL_NAME}. Stopping info message dump.")
                 await send_safe(info_channel,
                     f"**Welcome to ClanTracker OSRS!**\nYour identifier: `{clan_identifier}`.\n"
-                    f"An error occurred sending the full setup info. Please check my permissions (Send Messages, Read History) in this channel or contact support.",
+                    f"An error occurred sending the full setup info. Please give proper server permissions when inviting: (Manage Channels, View Channels, Send Messages, Read Message History).",
                     "INFO_CHANNEL_NAME"
                 )
                 break
@@ -966,6 +970,63 @@ def is_in_commands_channel():
             return False
     return app_commands.check(predicate)
 
+def is_in_database_channel():
+    """Checks if the command is invoked in the configured database inspection channel."""
+    async def predicate(interaction: discord.Interaction) -> bool:
+        if not INSPECT_DB_GUILD_ID or not INSPECT_DB_CHANNEL_ID:
+            logger.error(f"User {interaction.user} tried to use /database, but INSPECT_DATABASE_GUILD_ID or INSPECT_DATABASE_CHANNEL_ID are not configured.")
+            try:
+                await interaction.response.send_message(
+                    "❌ This command is disabled because the inspection channel is not configured in the bot's environment.",
+                    ephemeral=True
+                )
+            except discord.InteractionResponded: pass
+            except Exception as e: logger.error(f"Error sending database config error message: {e}", exc_info=True)
+            return False
+
+        if not interaction.guild or interaction.guild.id != INSPECT_DB_GUILD_ID:
+            logger.warning(f"User {interaction.user} tried to use /database outside the configured guild (Guild: {interaction.guild.name if interaction.guild else 'N/A'}).")
+            try:
+                await interaction.response.send_message(
+                    f"❌ This command can only be used in the designated server.",
+                    ephemeral=True
+                )
+            except discord.InteractionResponded: pass
+            except Exception as e: logger.error(f"Error sending database guild restriction message: {e}", exc_info=True)
+            return False
+
+        if not interaction.channel or interaction.channel.id != INSPECT_DB_CHANNEL_ID:
+            logger.warning(f"User {interaction.user} tried to use /database in the wrong channel (Channel: #{interaction.channel.name if interaction.channel else 'N/A'}).")
+            try:
+                await interaction.response.send_message(
+                    f"❌ This command can only be used in the designated database inspection channel.",
+                    ephemeral=True
+                )
+            except discord.InteractionResponded: pass
+            except Exception as e: logger.error(f"Error sending database channel restriction message: {e}", exc_info=True)
+            return False
+
+        # Check if bot has permissions to send files in this specific channel
+        if isinstance(interaction.channel, discord.TextChannel):
+            bot_member = interaction.guild.me
+            if not interaction.channel.permissions_for(bot_member).attach_files:
+                logger.error(f"Bot lacks 'Attach Files' permission in the database inspection channel #{interaction.channel.name} (ID: {interaction.channel.id}).")
+                try:
+                    await interaction.response.send_message(
+                        "❌ I don't have permission to attach files in this channel, which is required for the `/database` command.",
+                        ephemeral=True
+                    )
+                except discord.InteractionResponded: pass
+                except Exception as e: logger.error(f"Error sending database permission error message: {e}", exc_info=True)
+                return False
+        else: # Should not happen due to guild/channel ID check
+             logger.warning("Database command used in a non-text channel context unexpectedly.")
+             return False
+
+
+        return True # All checks passed
+    return app_commands.check(predicate)
+
 # --- HYD Slash Command ---
 @tree.command(name="hyd", description="Ask how the bot feels today :)")
 @is_in_commands_channel()
@@ -1000,6 +1061,65 @@ async def hyd_command(interaction: discord.Interaction):
             try:
                 await interaction.response.send_message("Sorry, I encountered an error while trying to express my existential dread.", ephemeral=True)
             except Exception: pass
+
+# Database Command (Used for debugging, inspecting the identifiers file, not for normal users)
+@tree.command(name="database", description="Sends the content of the clan identifiers database file.")
+@is_in_database_channel() # Apply the specific channel check
+async def database_command(interaction: discord.Interaction):
+    """Handles the /database command to view the identifier file."""
+    logger.info(f"Command '/database' invoked by {interaction.user} in channel #{interaction.channel.name}")
+
+    # Defer the response - reading file might take a moment
+    # Send non-ephemeral deferral so the final message is public in the channel
+    await interaction.response.defer(thinking=True)
+
+    try:
+        # Check if file exists
+        if not os.path.exists(IDENTIFIER_FILE):
+            logger.warning(f"Database file not found at {IDENTIFIER_FILE} when executing /database.")
+            await interaction.followup.send(f"⚠️ The database file (`{IDENTIFIER_FILE_NAME}`) was not found in the expected location (`{DATA_DIR}`).")
+            return
+
+        # Read the file content
+        with open(IDENTIFIER_FILE, 'r', encoding='utf-8') as f:
+            content = f.read()
+
+        if not content.strip():
+            logger.info(f"Database file {IDENTIFIER_FILE} is empty.")
+            await interaction.followup.send(f"ℹ️ The database file (`{IDENTIFIER_FILE_NAME}`) is currently empty.")
+            return
+
+        # Send the content as a file attachment
+        # Use io.StringIO to treat the string content like a file
+        import io
+        file_data = io.StringIO(content)
+        discord_file = discord.File(fp=file_data, filename=IDENTIFIER_FILE_NAME)
+
+        await interaction.followup.send(f"📄 Here is the content of `{IDENTIFIER_FILE_NAME}`:", file=discord_file)
+        logger.info(f"Successfully sent database file content for /database command requested by {interaction.user}.")
+
+    except discord.Forbidden:
+         logger.error(f"Forbidden error sending database file for /database command. Check 'Attach Files' permission in #{interaction.channel.name}.")
+         # We already deferred, so followup is needed. The check should prevent this, but handle defensively.
+         try:
+             await interaction.followup.send("❌ I encountered a permission error trying to send the file. Please ensure I can 'Attach Files' in this channel.")
+         except Exception: pass # Avoid further errors if followup fails
+    except discord.HTTPException as e:
+         logger.error(f"HTTP error sending database file for /database command: {e}", exc_info=True)
+         try:
+             await interaction.followup.send(f"❌ An HTTP error occurred while trying to send the file (Status: {e.status}). Please try again later.")
+         except Exception: pass
+    except Exception as e:
+        logger.error(f"Error executing /database command: {e}", exc_info=True)
+        try:
+            # Check if already responded via followup before sending another
+            if interaction.is_expired(): # Check if interaction is still valid
+                 logger.warning("Interaction expired before sending final error for /database.")
+                 return
+            # Attempt to send a generic error if no specific one was caught and sent
+            await interaction.followup.send("❌ An unexpected error occurred while retrieving the database file.")
+        except Exception as e_resp:
+            logger.error(f"Failed to send error message for /database command: {e_resp}", exc_info=True)
 
 # --- Command Check Error Handler ---
 @tree.error
@@ -1061,13 +1181,18 @@ def prepare_bot() -> bool:
     if not STATUS_GUILD_ID or not STATUS_CHANNEL_ID:
         logger.warning("STATUS_GUILD_ID or STATUS_CHANNEL_ID environment variables not set. Dynamic status updates will be disabled.")
 
+    # --- Log Database Inspection Status ---
+    if INSPECT_DB_GUILD_ID and INSPECT_DB_CHANNEL_ID:
+        logger.info(f"Database inspection command (/database) enabled for Guild ID {INSPECT_DB_GUILD_ID}, Channel ID {INSPECT_DB_CHANNEL_ID}.")
+    else:
+        logger.warning("Database inspection command (/database) is disabled. Set INSPECT_DATABASE_GUILD_ID and INSPECT_DATABASE_CHANNEL_ID environment variables to enable.")
+
     # Ensure src/responses directory exists for hyd command
     try:
         os.makedirs(RESPONSES_DIR, exist_ok=True)
         logger.info(f"Ensured responses directory exists: {RESPONSES_DIR}")
     except Exception as e:
         logger.error(f"Could not create responses directory '{RESPONSES_DIR}': {e}", exc_info=True)
-        # Decide if this is critical - maybe not if hyd isn't essential
 
     logger.info("Bot preparation complete.")
     return True
