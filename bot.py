@@ -564,7 +564,6 @@ class ClanTrackerClient(discord.Client):
         # Use json.dumps with OrderedDict support via lambda for aiohttp response
         return web.json_response(final_response, dumps=lambda d: json.dumps(d, ensure_ascii=False))
 
-
 # Instantiate the client
 client = ClanTrackerClient(intents=intents)
 tree = client.tree # Make tree accessible for command decorators
